@@ -129,18 +129,31 @@ def draw_panel(h, events, count, focused, banner, card,
             _text(panel, line, (26, y + 58 + 24 * i), 0.58)
     elif card and card[0] == "answer":
         q, res = card[1]
-        for line in _wrap(f'Q: "{q}"', 40):
+        for line in _wrap(f'Q: "{q}"', 40)[:2]:
             _text(panel, line, (20, y), 0.65, VIOLET, 1); y += 24
-        for group, hits in (("SEEN", res["seen"]), ("HEARD", res["heard"])):
-            _text(panel, group, (20, y + 6), 0.7, INK, 2); y += 30
-            for hit in hits[:3]:
-                p = hit.payload
-                what = p.get("transcript") or p.get("label") or "?"
-                when = time.strftime("%H:%M", time.localtime(p["ts"]))
-                line = _wrap(f"{when}  {what}", 42)[0]
-                _text(panel, f"{line}  ({hit.score:.2f})", (30, y), 0.58)
-                y += 24
-            y += 8
+        _text(panel, "SEEN", (20, y + 6), 0.7, INK, 2); y += 20
+        for hit in res["seen"][:2]:
+            p = hit.payload
+            thumb = cv2.imread(p["thumb"]) if p.get("thumb") else None
+            x = 30
+            if thumb is not None and y + 56 < h - 40:
+                panel[y:y + 56, 24:80] = cv2.resize(thumb, (56, 56))
+                x = 92
+            when = time.strftime("%H:%M", time.localtime(p["ts"]))
+            _text(panel, f"{when}  {p.get('label') or 'unknown'}",
+                  (x, y + 22), 0.58)
+            _text(panel, f"score {hit.score:.2f}", (x, y + 46), 0.5,
+                  VIOLET, 1)
+            y += 62
+        y += 12
+        _text(panel, "HEARD", (20, y + 6), 0.7, INK, 2); y += 30
+        for hit in res["heard"][:2]:
+            p = hit.payload
+            what = p.get("transcript") or p.get("label") or "?"
+            when = time.strftime("%H:%M", time.localtime(p["ts"]))
+            line = _wrap(f"{when}  {what}", 42)[0]
+            _text(panel, f"{line}  ({hit.score:.2f})", (30, y), 0.58)
+            y += 24
     log = events[-3:]
     ly = h - 44 - 22 * len(log)
     if log:
@@ -247,7 +260,7 @@ class LiveApp:
             wav = "/tmp/l6-utterance.wav"
             self.banner = "LISTENING — speak now"
             try:
-                audio.record_wav(wav, 5 if kind == "t" else 4)
+                audio.record_wav(wav)  # stops itself after trailing silence
             except Exception as e:
                 print(f"mic failed: {e}")
                 self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"

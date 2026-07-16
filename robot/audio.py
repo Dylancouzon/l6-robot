@@ -11,21 +11,38 @@ MIC_DEVICE = None  # None = system default input. To pick another device:
                    # and set this to the device index or name.
 
 
-def record_wav(path, seconds=5.0):
+SPEECH_RMS = 200   # a block above this counts as speech
+TRAIL_QUIET = 0.9  # s of quiet after speech before the recorder stops
+
+
+def record_wav(path, max_seconds=8.0):
     """Record the mic to a 16 kHz mono WAV — what Whisper expects.
 
-    Records at the device's native rate (USB mics often refuse 16 kHz),
-    then resamples; linear interpolation is plenty for speech.
+    Stops on its own: once speech has been heard, ~a second of quiet ends
+    the recording (max_seconds is the cap, not the duration). Records at
+    the device's native rate (USB mics often refuse 16 kHz), then
+    resamples; linear interpolation is plenty for speech.
     """
     import numpy as np
     import sounddevice as sd
     if MIC_DEVICE is not None:
         sd.default.device = (MIC_DEVICE, None)
     rate = int(sd.query_devices(kind="input")["default_samplerate"])
-    data = sd.rec(int(seconds * rate), samplerate=rate, channels=1,
-                  dtype="int16")
-    sd.wait()
-    samples = data[:, 0]
+    block = int(rate * 0.1)
+    chunks, spoke, quiet = [], False, 0.0
+    with sd.InputStream(samplerate=rate, channels=1, dtype="int16",
+                        blocksize=block) as stream:
+        for _ in range(int(max_seconds / 0.1)):
+            data, _ = stream.read(block)
+            chunks.append(data[:, 0].copy())
+            rms = np.sqrt(np.mean(data.astype(np.float64) ** 2))
+            if rms >= SPEECH_RMS:
+                spoke, quiet = True, 0.0
+            elif spoke:
+                quiet += 0.1
+                if quiet >= TRAIL_QUIET:
+                    break
+    samples = np.concatenate(chunks)
     if rate != 16000:
         n = int(len(samples) * 16000 / rate)
         samples = np.interp(
