@@ -19,8 +19,9 @@ def day_start_ts():
 
 
 class Robot:
-    def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt"):
-        self.memory = Memory(data_dir)
+    def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
+                 threshold=RECOGNIZE_THRESHOLD):
+        self.memory = Memory(data_dir, threshold=threshold)
         self.detector = Detector(weights)
         self.thumbs = Path(data_dir) / "thumbs"
         self.thumbs.mkdir(exist_ok=True)
@@ -80,7 +81,7 @@ class Robot:
             transcript=transcript,
             thumb=self._thumb(crop, "taught"),
         )
-        self.log(f'taught: "{label}" (vectors: image + text)')
+        self.log(f'taught "{label[:18]}" -> image + text')
         return {"id": pid, "label": label, "transcript": transcript}
 
     # -- ask -------------------------------------------------------------------

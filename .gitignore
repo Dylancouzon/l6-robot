@@ -2,3 +2,4 @@
 __pycache__/
 edge-data*/
 *.pt
+dogfood/

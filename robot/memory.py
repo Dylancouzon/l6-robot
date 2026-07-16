@@ -23,7 +23,9 @@ from qdrant_edge import (
     UpdateOperation,
 )
 
-RECOGNIZE_THRESHOLD = 0.80  # the course's number — never move it
+# Default matches L5. Calibratable (--threshold): demo quality wins; if live
+# calibration moves it, L5 gets edited to match so "same number" stays true.
+RECOGNIZE_THRESHOLD = 0.80
 
 CONFIG = EdgeConfig(
     vectors={
@@ -36,7 +38,8 @@ CONFIG = EdgeConfig(
 class Memory:
     """Store, recognize, recall — the L2–L5 lifecycle behind the robot."""
 
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, threshold=RECOGNIZE_THRESHOLD):
+        self.threshold = threshold
         self.dir = Path(data_dir)
         if (self.dir / "segments").exists() or any(self.dir.glob("*")):
             self.shard = EdgeShard.load(str(self.dir))
@@ -113,7 +116,7 @@ class Memory:
         if not hits:
             return None, 0.0
         top = hits[0]
-        if top.score >= RECOGNIZE_THRESHOLD:
+        if top.score >= self.threshold:
             return top, top.score
         return None, top.score
 

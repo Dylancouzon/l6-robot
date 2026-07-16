@@ -57,27 +57,28 @@ def draw_feed(frame, tracks, focused):
     return frame
 
 
-def draw_gauge(panel, y, score):
-    """The evidence: live score against the 0.80 line."""
+def draw_gauge(panel, y, score, threshold):
+    """The evidence: live score against the threshold line."""
     x0, x1 = 30, PANEL_W - 30
     lo, hi = 0.5, 1.0
     px = lambda v: int(x0 + (max(lo, min(hi, v)) - lo) / (hi - lo) * (x1 - x0))
     cv2.rectangle(panel, (x0, y), (x1, y + 26), (225, 222, 215), -1)
     if score > lo:
-        color = TEAL if score >= RECOGNIZE_THRESHOLD else RED
+        color = TEAL if score >= threshold else RED
         cv2.rectangle(panel, (x0, y), (px(score), y + 26), color, -1)
-    tx = px(RECOGNIZE_THRESHOLD)
+    tx = px(threshold)
     cv2.line(panel, (tx, y - 8), (tx, y + 34), INK, 3)
-    _text(panel, f"{RECOGNIZE_THRESHOLD:.2f}", (tx - 32, y - 14), 0.7, INK, 2)
+    _text(panel, f"{threshold:.2f}", (tx - 32, y - 14), 0.7, INK, 2)
     _text(panel, f"{score:.3f}", (x1 - 92, y + 62), 1.0, INK, 2)
     _text(panel, "match", (x0, y + 62), 0.7)
 
 
-def draw_panel(h, robot, focused, banner, answer):
+def draw_panel(h, events, count, focused, banner, card,
+               threshold=RECOGNIZE_THRESHOLD):
     panel = np.full((h, PANEL_W, 3), BG, dtype=np.uint8)
     cv2.rectangle(panel, (0, 0), (PANEL_W, 54), VIOLET, -1)
     _text(panel, "ROBOT MEMORY", (20, 37), 1.0, (255, 255, 255), 2)
-    _text(panel, f"{robot.memory.count()} memories", (PANEL_W - 190, 37),
+    _text(panel, f"{count} memories", (PANEL_W - 190, 37),
           0.7, (255, 255, 255), 1)
     y = 100
     if focused is None or not focused.last_query:
@@ -85,20 +86,28 @@ def draw_panel(h, robot, focused, banner, answer):
     elif focused.label:
         _chip(panel, focused.label, (30, y), TEAL, 1.0)
         if focused.note:
-            for i, line in enumerate(_wrap(f'"{focused.note}"', 38)):
+            for i, line in enumerate(_wrap(f'"{focused.note}"', 38)[:2]):
                 _text(panel, line, (30, y + 34 + 26 * i), 0.62)
         y += 34 + 26 * 2
     else:
         _chip(panel, "UNKNOWN — press T to teach", (30, y), RED, 0.85)
         y += 60
-    draw_gauge(panel, 180, focused.score if focused else 0.0)
+    draw_gauge(panel, 180, focused.score if focused else 0.0, threshold)
     y = 290
     if banner:
         cv2.rectangle(panel, (0, y - 30), (PANEL_W, y + 12), ORANGE, -1)
         _text(panel, banner, (20, y), 0.85, (255, 255, 255), 2)
     y = 340
-    if answer:
-        q, res = answer
+    if card and card[0] == "taught":
+        # the shot-2 evidence: one point, both named vectors, the words kept
+        taught = card[1]
+        cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 116), TEAL, 3)
+        _text(panel, "MEMORY WRITTEN", (26, y), 0.75, TEAL, 2)
+        _text(panel, "vectors: image + text", (26, y + 30), 0.7, INK, 2)
+        for i, line in enumerate(_wrap(f'"{taught["transcript"]}"', 40)[:3]):
+            _text(panel, line, (26, y + 58 + 24 * i), 0.58)
+    elif card and card[0] == "answer":
+        q, res = card[1]
         for line in _wrap(f'Q: "{q}"', 40):
             _text(panel, line, (20, y), 0.65, VIOLET, 1); y += 24
         for group, hits in (("SEEN", res["seen"]), ("HEARD", res["heard"])):
@@ -111,7 +120,7 @@ def draw_panel(h, robot, focused, banner, answer):
                 _text(panel, f"{line}  ({hit.score:.2f})", (30, y), 0.58)
                 y += 24
             y += 8
-    log = robot.events[-3:]
+    log = events[-3:]
     ly = h - 44 - 22 * len(log)
     if log:
         _text(panel, "memory writes", (20, ly), 0.55, VIOLET, 1)
@@ -143,7 +152,8 @@ class LiveApp:
         self.latest = None
         self.tracks = []
         self.banner = None
-        self.answer = None
+        self.card = None   # ("taught", {...}) or ("answer", (q, results))
+        self.mem_count = 0
         self.stop = threading.Event()
 
     def _detect_loop(self):
@@ -156,12 +166,24 @@ class LiveApp:
             last = time.time()
             with self.lock:
                 self.tracks = self.robot.process_frame(frame)
+                self.mem_count = self.robot.memory.count()
 
-    def _listen(self, seconds):
+    def _render(self, frame, tracks, focused):
+        view = draw_feed(frame.copy(), tracks, focused)
+        panel = draw_panel(view.shape[0], self.robot.events, self.mem_count,
+                           focused, self.banner, self.card,
+                           self.robot.memory.threshold)
+        cv2.imshow("L6 Robot Memory", np.hstack([view, panel]))
+
+    def _listen(self, frame, tracks, focused, seconds):
         wav = "/tmp/l6-utterance.wav"
         self.banner = "LISTENING — speak now"
+        self._render(frame, tracks, focused)  # show it before recording blocks
+        cv2.waitKey(1)
         audio.record_wav(wav, seconds)
         self.banner = "thinking..."
+        self._render(frame, tracks, focused)
+        cv2.waitKey(1)
         return wav
 
     def run(self):
@@ -176,33 +198,33 @@ class LiveApp:
             self.latest = frame
             tracks = list(self.tracks)
             focused = self.robot.focused(tracks)
-            view = draw_feed(frame.copy(), tracks, focused)
-            panel = draw_panel(view.shape[0], self.robot, focused,
-                               self.banner, self.answer)
-            cv2.imshow("L6 Robot Memory", np.hstack([view, panel]))
+            self._render(frame, tracks, focused)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
             elif key == ord("t") and focused is not None:
                 crop = focused.crop.copy()
-                wav = self._listen(5)
+                wav = self._listen(frame, tracks, focused, 5)
                 with self.lock:
                     taught = self.robot.teach(crop, wav)
+                    self.mem_count = self.robot.memory.count()
                     for t in self.robot.detector.tracks.values():
                         t.last_query = 0  # requery now: watch it recognize
+                self.card = ("taught", taught)
                 self.banner = f'taught: "{taught["label"]}"'
             elif key == ord("a"):
-                wav = self._listen(4)
+                wav = self._listen(frame, tracks, focused, 4)
                 with self.lock:
                     q, res = self.robot.ask_from_wav(wav)
-                self.answer = (q, res)
+                self.card = ("answer", (q, res))
                 self.banner = None
             elif key == ord("r"):
                 with self.lock:
                     n = self.robot.reboot()
-                    if self.answer:
-                        q = self.answer[0]
-                        self.answer = (q, self.robot.ask(q))
+                    self.mem_count = n
+                    if self.card and self.card[0] == "answer":
+                        q = self.card[1][0]
+                        self.card = ("answer", (q, self.robot.ask(q)))
                 self.banner = f"rebooted from disk — {n} memories"
         self.stop.set()
         self.cap.release()
@@ -246,8 +268,11 @@ def main():
     ap.add_argument("--source", help="image dir or video file (headless)")
     ap.add_argument("--data", default="edge-data", help="shard directory")
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--threshold", type=float, default=RECOGNIZE_THRESHOLD,
+                    help="recognition threshold (calibration knob; if it "
+                         "moves for the shoot, L5 moves with it)")
     args = ap.parse_args()
-    robot = Robot(data_dir=args.data)
+    robot = Robot(data_dir=args.data, threshold=args.threshold)
     if args.source:
         replay(robot, args.source)
     else:
