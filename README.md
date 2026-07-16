@@ -71,7 +71,7 @@ Target: one self-contained unit that runs the full loop untethered, filmable in 
 
 **Jetson software port checklist (verify before buying anything else):**
 
-1. `qdrant-edge-py==0.7.2` ships an aarch64 Linux wheel — check first; it's the one dependency without an obvious fallback.
+1. `qdrant-edge-py==0.7.2` aarch64 Linux wheel: **verified on PyPI** (`manylinux_2_28_aarch64`; JetPack 6 / Ubuntu 22.04 satisfies it). The one no-fallback dependency is covered.
 2. PyTorch + ultralytics from NVIDIA's JetPack wheels; device selection in `robot/detect.py` becomes `cuda` (currently `mps`/`cpu` — one line).
 3. `onnxruntime` (CPU) aarch64 wheel for fastembed + onnx-asr — exists, but pin what you test.
 4. `sounddevice` needs `sudo apt install portaudio19-dev`; the macOS `objc` autorelease import already no-ops off-macOS.
