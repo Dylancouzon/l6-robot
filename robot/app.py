@@ -1,17 +1,22 @@
-"""Live demo app: webcam + mic, or headless frame replay.
+"""Live demo app: webcam + mic, viewed in the browser; or headless replay.
 
-    uv run python -m robot.app                 # live (default camera + mic)
+    uv run python -m robot.app                 # live -> http://127.0.0.1:8765
     uv run python -m robot.app --source DIR    # headless: replay images/video
 
-Keys (live): T teach the focused object (speak while it listens)
+The live view is a local web page (OpenCV's macOS windows break on
+multi-monitor setups). Keys, pressed in the browser tab:
+             T teach the focused object (speak while it listens)
              A ask "what did you see today?" by voice
              R the reboot beat: close the shard, reload from disk, re-ask
              Q quit
 """
 import argparse
+import queue
 import sys
 import threading
 import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import cv2
@@ -30,7 +35,22 @@ ORANGE = (0, 152, 255)
 VIOLET = (255, 71, 96)
 PANEL_W = 480
 FONT = cv2.FONT_HERSHEY_DUPLEX
-WIN = "L6 Robot Memory"
+PORT = 8765
+
+PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
+<style>
+  body { margin:0; background:#e8e5df; display:grid;
+         place-items:center; height:100vh }
+  img  { max-width:100vw; max-height:100vh }
+</style>
+<img src="/stream">
+<script>
+  addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if ('tarq'.includes(k)) fetch('/key?k=' + k);
+  });
+</script>
+"""
 
 
 def _text(img, s, xy, scale=0.8, color=INK, thick=1):
@@ -143,6 +163,44 @@ def _wrap(s, width):
     return lines + [cur] if cur else lines or [""]
 
 
+class StreamHandler(BaseHTTPRequestHandler):
+    app = None  # set by LiveApp
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        try:
+            if self.path == "/":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(PAGE)
+            elif self.path == "/stream":
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                while not self.app.stop.is_set():
+                    jpeg = self.app.jpeg
+                    if jpeg:
+                        self.wfile.write(
+                            b"--frame\r\nContent-Type: image/jpeg\r\n"
+                            + f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
+                            + jpeg + b"\r\n")
+                    time.sleep(0.04)
+            elif self.path.startswith("/key?k="):
+                self.app.keys.put(self.path[-1])
+                self.send_response(204)
+                self.end_headers()
+            else:
+                self.send_response(404)
+                self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # tab closed or refreshed mid-stream
+
+
 class LiveApp:
     def __init__(self, robot, camera=0):
         self.robot = robot
@@ -155,6 +213,8 @@ class LiveApp:
         self.banner = None
         self.card = None   # ("taught", {...}) or ("answer", (q, results))
         self.mem_count = 0
+        self.jpeg = None   # latest composed view, ready for the stream
+        self.keys = queue.Queue()
         self.stop = threading.Event()
 
     def _detect_loop(self):
@@ -174,32 +234,34 @@ class LiveApp:
         panel = draw_panel(view.shape[0], self.robot.events, self.mem_count,
                            focused, self.banner, self.card,
                            self.robot.memory.threshold)
-        cv2.imshow(WIN, np.hstack([view, panel]))
+        ok, buf = cv2.imencode(".jpg", np.hstack([view, panel]),
+                               [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            self.jpeg = buf.tobytes()
 
     def _listen(self, frame, tracks, focused, seconds):
         wav = "/tmp/l6-utterance.wav"
         self.banner = "LISTENING — speak now"
         self._render(frame, tracks, focused)  # show it before recording blocks
-        cv2.waitKey(1)
         audio.record_wav(wav, seconds)
         if audio.is_silent(wav):
             self.banner = "didn't hear anything — try again"
             return None
         self.banner = "thinking..."
         self._render(frame, tracks, focused)
-        cv2.waitKey(1)
         return wav
 
     def run(self):
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
-        # WINDOW_NORMAL, created once: the default AUTOSIZE window re-derives
-        # its geometry on every imshow, which on multi-monitor macOS snaps it
-        # back to the original display — sometimes offscreen.
-        cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WIN, 1280 + PANEL_W, 720)
+        StreamHandler.app = self
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), StreamHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
         print("warming up models...")
         models.warm_up()
         threading.Thread(target=self._detect_loop, daemon=True).start()
+        url = f"http://127.0.0.1:{PORT}"
+        print(f"live view: {url}  (keys work in the browser tab)")
+        webbrowser.open(url)
         while True:
             ok, frame = self.cap.read()
             if not ok:
@@ -208,10 +270,13 @@ class LiveApp:
             tracks = list(self.tracks)
             focused = self.robot.focused(tracks)
             self._render(frame, tracks, focused)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            try:
+                key = self.keys.get_nowait()
+            except queue.Empty:
+                key = None
+            if key == "q":
                 break
-            elif key == ord("t") and focused is not None:
+            elif key == "t" and focused is not None:
                 crop = focused.crop.copy()
                 wav = self._listen(frame, tracks, focused, 5)
                 if wav is None:
@@ -223,7 +288,8 @@ class LiveApp:
                         t.last_query = 0  # requery now: watch it recognize
                 self.card = ("taught", taught)
                 self.banner = f'taught: "{taught["label"]}"'
-            elif key == ord("a"):
+                self._drain_keys()
+            elif key == "a":
                 wav = self._listen(frame, tracks, focused, 4)
                 if wav is None:
                     continue
@@ -231,7 +297,8 @@ class LiveApp:
                     q, res = self.robot.ask_from_wav(wav)
                 self.card = ("answer", (q, res))
                 self.banner = None
-            elif key == ord("r"):
+                self._drain_keys()
+            elif key == "r":
                 with self.lock:
                     n = self.robot.reboot()
                     self.mem_count = n
@@ -240,9 +307,14 @@ class LiveApp:
                         self.card = ("answer", (q, self.robot.ask(q)))
                 self.banner = f"rebooted from disk — {n} memories"
         self.stop.set()
+        server.shutdown()
         self.cap.release()
         self.robot.close()
-        cv2.destroyAllWindows()
+
+    def _drain_keys(self):
+        """Drop key presses queued while a blocking teach/ask ran."""
+        while not self.keys.empty():
+            self.keys.get_nowait()
 
 
 def replay(robot, source):

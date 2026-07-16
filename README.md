@@ -8,12 +8,12 @@ Same stack as the course notebooks: one Qdrant Edge shard (0.7.2) with two named
 
 ```bash
 uv sync
-uv run python -m robot.app              # live: webcam + mic
+uv run python -m robot.app              # live: webcam + mic -> browser view
 uv run python -m robot.app --source d/  # headless: replay an image dir or video
 uv run python smoke_test.py             # file-mode end-to-end check
 ```
 
-Live keys: **T** teach the focused object by voice ("this is my mug — Maria made it"), **A** ask a question by voice ("what did you see today?"), **R** the reboot beat (close the shard, reload from disk, re-ask), **Q** quit.
+The live view opens at http://127.0.0.1:8765 (a browser page, because OpenCV's macOS windows misbehave on multi-monitor setups). Keys, pressed in the browser tab: **T** teach the focused object by voice ("this is my mug — Maria made it"), **A** ask a question by voice ("what did you see today?"), **R** the reboot beat (close the shard, reload from disk, re-ask), **Q** quit. Every recognized object is shown; only the most prominent unknown is shown and teachable. Calibration knobs: `--threshold` (recognition), `--conf` (detector sensitivity).
 
 Mic capture shells out to ffmpeg (`brew install ffmpeg`); set `robot/audio.py:MIC_DEVICE` if the default input isn't your mic.
 
