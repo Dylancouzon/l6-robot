@@ -181,6 +181,9 @@ class LiveApp:
         self._render(frame, tracks, focused)  # show it before recording blocks
         cv2.waitKey(1)
         audio.record_wav(wav, seconds)
+        if audio.is_silent(wav):
+            self.banner = "didn't hear anything — try again"
+            return None
         self.banner = "thinking..."
         self._render(frame, tracks, focused)
         cv2.waitKey(1)
@@ -205,6 +208,8 @@ class LiveApp:
             elif key == ord("t") and focused is not None:
                 crop = focused.crop.copy()
                 wav = self._listen(frame, tracks, focused, 5)
+                if wav is None:
+                    continue
                 with self.lock:
                     taught = self.robot.teach(crop, wav)
                     self.mem_count = self.robot.memory.count()
@@ -214,6 +219,8 @@ class LiveApp:
                 self.banner = f'taught: "{taught["label"]}"'
             elif key == ord("a"):
                 wav = self._listen(frame, tracks, focused, 4)
+                if wav is None:
+                    continue
                 with self.lock:
                     q, res = self.robot.ask_from_wav(wav)
                 self.card = ("answer", (q, res))

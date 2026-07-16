@@ -77,7 +77,12 @@ class Memory:
         return pid
 
     def teach(self, image_vec, text_vec, label, transcript, ts=None, thumb=None):
-        """One point, BOTH named vectors — searchable by sight and by words."""
+        """One point, BOTH named vectors — searchable by sight and by words.
+
+        ponytail: re-teaching the same object adds a second point; recognition
+        returns whichever view is nearest, so the newer note isn't guaranteed
+        to win. Fold-by-label (as in memory-fleet) if that ever matters.
+        """
         return self._upsert(
             {"image": image_vec, "text": text_vec},
             {

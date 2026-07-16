@@ -1,6 +1,7 @@
 """Push-to-talk mic capture (ffmpeg/avfoundation) and label parsing."""
 import re
 import subprocess
+import wave
 
 MIC_DEVICE = ":0"  # default mic; list devices with:
                    # ffmpeg -f avfoundation -list_devices true -i ""
@@ -15,6 +16,18 @@ def record_wav(path, seconds=5.0):
         check=True,
     )
     return str(path)
+
+
+def is_silent(path, rms_floor=120):
+    """True if the WAV is near-silence. Whisper hallucinates on silence
+    ("Thanks for watching!"), so a failed mic capture must fail visibly
+    instead of teaching a nonsense label."""
+    import numpy as np
+    with wave.open(str(path)) as w:
+        samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    if not len(samples):
+        return True
+    return np.sqrt(np.mean(samples.astype(np.float64) ** 2)) < rms_floor
 
 
 # ASR often drops the punctuation that would end the naming clause, so the

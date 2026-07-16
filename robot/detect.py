@@ -21,8 +21,24 @@ REQUERY_SECONDS = 2.0
 DEAD_SECONDS = 1.5
 PAD = 0.12
 
-PERSON_WORDS = ("person", "man", "woman", "human", "face", "hand", "arm",
-                "finger", "head", "hair", "ear", "boy", "girl")
+# People, faces, and body parts are never objects to remember. Word list and
+# matching copied verbatim from memory-fleet's detector (field-tuned there).
+PERSON_WORDS = frozenset(
+    "person people man men woman women boy girl child kid baby human humans face "
+    "faces head hair ear eye eyes nose mouth lip lips chin cheek forehead beard "
+    "mustache moustache neck shoulder arm arms elbow wrist hand hands finger "
+    "fingers thumb fist chest torso waist hip leg legs knee ankle foot feet toe "
+    "toes skin body "
+    "wig ponytail braid bangs afro dreadlock dreadlocks mane haircut hairstyle "
+    "eyebrow eyebrows eyelash eyelashes lash lashes freckle freckles jaw scalp "
+    "sideburn sideburns goatee tongue tooth teeth throat nostril manicure "
+    "businessman fisherman fireman airman craftsman".split()
+)
+
+
+def is_person_like(class_name):
+    return any(w in PERSON_WORDS
+               for w in class_name.lower().replace("-", " ").split())
 
 
 def padded_crop(frame, box):
@@ -60,8 +76,14 @@ class Detector:
     """YOLOE + BoT-SORT tracking + the stability gate."""
 
     def __init__(self, weights="yoloe-11l-seg-pf.pt"):
+        from pathlib import Path
         from ultralytics import YOLO
         import torch
+        # resolve against the repo root, not the cwd — otherwise running from
+        # another directory silently re-downloads the 70 MB weights
+        repo_copy = Path(__file__).resolve().parents[1] / weights
+        if not Path(weights).exists() and repo_copy.exists():
+            weights = str(repo_copy)
         self.model = YOLO(weights)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.names = self.model.names
@@ -99,10 +121,11 @@ class Detector:
                 boxes.cls.int().tolist(),
                 boxes.xyxy.tolist(),
             ):
-                name = str(self.names.get(cls, "")).lower()
-                if any(word in name for word in PERSON_WORDS):
-                    self._person_tids.add(tid)
                 if tid in self._person_tids:
+                    continue
+                if is_person_like(str(self.names.get(cls, ""))):
+                    self._person_tids.add(tid)
+                    self.tracks.pop(tid, None)
                     continue
                 x1, y1, x2, y2 = box
                 area = (x2 - x1) * (y2 - y1) / (w * h)
@@ -114,6 +137,9 @@ class Detector:
                 t.box = box
                 t.crop = padded_crop(frame, box)
                 seen_tids.add(tid)
+
+        if len(self._person_tids) > 4096:  # ids only grow; keep recent flags
+            self._person_tids = set(sorted(self._person_tids)[-1024:])
 
         for tid, t in list(self.tracks.items()):
             if tid not in seen_tids:
