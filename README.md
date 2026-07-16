@@ -27,3 +27,12 @@ Mic capture shells out to ffmpeg (`brew install ffmpeg`); set `robot/audio.py:MI
 - `testdata/` — fixture images (Wikimedia Commons, see `CREDITS.json`) and WAVs for the smoke test.
 
 Shard data lives in `edge-data/` (gitignored). Delete it for a blank memory.
+
+## V2: curated memories from the cloud (planned, not built)
+
+For in-person showcases the robot should wake up already knowing things. At startup it pulls a **curated memory set** from Qdrant Cloud — sightings and taught objects that were cleaned and reviewed beforehand — into the local shard, then runs exactly as today: fully local, offline after the sync.
+
+- Sync uses Edge's built-in snapshot flow (`snapshot_manifest` / `unpack_snapshot` / `update_from_snapshot`); we own only the transport. No hand-rolled sync.
+- Because the set is reviewed offline, payload metadata (labels, notes, place tags like `desk` / `kitchen`) is trustworthy — so booth questions like "where are my keys?" answer from baseline memory with a photo, a time, and a place.
+- Live teach/recall/forget stay unchanged and write locally; the curated set is the starting point, not a cage.
+- Out of scope for V2: any LLM answer layer, auto-labeling from detector classes, live two-way fleet sync.
