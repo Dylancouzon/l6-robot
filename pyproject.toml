@@ -9,7 +9,7 @@ dependencies = [
     "onnx-asr>=0.12.0",
     "onnxruntime>=1.27.0",
     "opencv-python>=5.0.0.93",
-    "pyobjc-core>=12.2.1",
+    "pyobjc-core>=12.2.1; sys_platform == 'darwin'",  # macOS-only MPS leak fix; no Linux wheels exist
     "qdrant-edge-py==0.7.2",
     "sounddevice>=0.5.5",
     "ultralytics>=8.4.96",

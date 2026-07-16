@@ -1,17 +1,24 @@
 """Live demo app: webcam + mic, viewed in the browser; or headless replay.
 
     uv run python -m robot.app                 # live -> http://127.0.0.1:8765
+    uv run python -m robot.app --host 0.0.0.0  # live, reachable from a phone/iPad
     uv run python -m robot.app --source DIR    # headless: replay images/video
 
 The live view is a local web page (OpenCV's macOS windows break on
-multi-monitor setups). Keys, pressed in the browser tab:
-             T teach the focused object (speak while it listens)
-             A ask "what did you see today?" by voice
-             R the reboot beat: close the shard, reload from disk, re-ask
-             Q quit
+multi-monitor setups). Controls, in the browser tab (laptop keys) or as
+touch buttons (phone/iPad):
+             T / hold TEACH  teach the focused object (speak while held)
+             A / hold ASK    ask "what did you see today?" by voice
+             R / REBOOT      close the shard, reload from disk, re-ask
+             Q / quit        quit
+On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
+--host non-loopback serves HTTPS so the browser will grant mic access.
 """
 import argparse
 import queue
+import socket
+import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -36,21 +43,141 @@ VIOLET = (255, 71, 96)
 PANEL_W = 480
 FONT = cv2.FONT_HERSHEY_DUPLEX
 PORT = 8765
+UTTERANCE_WAV = "/tmp/l6-utterance.wav"  # one buffer; the busy gate serializes writes
 
 PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
-  body { margin:0; background:#e8e5df; display:grid;
-         place-items:center; height:100vh }
-  img  { max-width:100vw; max-height:100vh }
+  html,body { margin:0; height:100%; overflow:hidden; background:#0b0b0b;
+              font-family:system-ui,sans-serif; touch-action:manipulation }
+  #app  { width:100vw; height:100vh; display:flex; flex-direction:column }
+  #view { flex:1; min-height:0; width:100%; object-fit:contain; display:block }
+  #bar  { display:flex; gap:8px; padding:10px; flex:0 0 auto; background:#e8e5df }
+  button { flex:1; min-height:64px; border:0; border-radius:12px; font-size:22px;
+           font-weight:700; color:#fff; -webkit-user-select:none; user-select:none;
+           touch-action:none }
+  #teach  { background:#009688 }
+  #ask    { background:#6047ff }
+  #reboot { background:#20262d }
+  #quit   { flex:0 0 80px; background:#8a8a8a; font-size:15px }
+  button.rec { box-shadow:0 0 0 4px #fff inset; filter:brightness(1.25) }
+  #hint { display:none; position:fixed; top:8px; left:50%;
+          transform:translateX(-50%); background:#20262d; color:#fff;
+          padding:8px 14px; border-radius:20px; font-size:14px; z-index:9 }
+  @media (orientation:portrait) { #hint { display:block } }
 </style>
-<img src="/stream">
+<div id="app">
+  <img id="view" src="/stream">
+  <div id="bar">
+    <button id="teach">HOLD&nbsp;&middot;&nbsp;TEACH</button>
+    <button id="ask">HOLD&nbsp;&middot;&nbsp;ASK</button>
+    <button id="reboot">REBOOT</button>
+    <button id="quit">quit</button>
+  </div>
+</div>
+<div id="hint">&#8635; rotate to landscape</div>
 <script>
+  const $ = id => document.getElementById(id);
+  const img = $('view');
+  img.onerror = () => setTimeout(() => { img.src = '/stream?' + Date.now(); }, 1000);
+
+  let lock = null;
+  const wake = async () => { try { lock = await navigator.wakeLock.request('screen'); } catch (e) {} };
+  wake();
+  addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
+
+  // Laptop keyboard drives the sounddevice mic on the machine itself.
   addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if ('tarq'.includes(k)) fetch('/key?k=' + k);
   });
+  $('reboot').onclick = () => fetch('/key?k=r');
+  $('quit').onclick   = () => fetch('/key?k=q');
+
+  // Hold TEACH / ASK to record from THIS device's mic and upload one WAV.
+  const WORKLET = URL.createObjectURL(new Blob([
+    "class Rec extends AudioWorkletProcessor{process(i){const c=i[0][0];" +
+    "if(c)this.port.postMessage(c.slice(0));return true}}" +
+    "registerProcessor('rec',Rec)"], {type:'text/javascript'}));
+  let ctx, stream, chunks = [], holding = false, rate = 16000;
+
+  async function start(kind, btn) {
+    if (holding) return;
+    holding = true; chunks = []; btn.classList.add('rec');
+    fetch('/listen?k=' + kind);   // narrate "LISTENING" on the filmed view
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(
+        { audio: { echoCancellation: true, noiseSuppression: true } });
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.resume();
+      await ctx.audioWorklet.addModule(WORKLET);
+      rate = ctx.sampleRate;
+      const node = new AudioWorkletNode(ctx, 'rec');
+      node.port.onmessage = e => chunks.push(e.data);
+      ctx.createMediaStreamSource(stream).connect(node);
+    } catch (e) {
+      holding = false; btn.classList.remove('rec'); alert('mic unavailable: ' + e);
+    }
+  }
+  async function stop(kind, btn) {
+    if (!holding) return;
+    holding = false; btn.classList.remove('rec');
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (ctx) await ctx.close();
+    fetch('/audio?k=' + kind, { method: 'POST', body: encodeWav(chunks, rate) });
+  }
+  function encodeWav(chunks, rate) {
+    const n = chunks.reduce((a, c) => a + c.length, 0);
+    const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    const s = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+    s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVE'); s(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data');
+    v.setUint32(40, n * 2, true);
+    let o = 44;
+    for (const c of chunks) for (let i = 0; i < c.length; i++, o += 2) {
+      const x = Math.max(-1, Math.min(1, c[i]));
+      v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+    }
+    return buf;
+  }
+  for (const [id, k] of [['teach', 't'], ['ask', 'a']]) {
+    const btn = $(id);
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); start(k, btn); });
+    btn.addEventListener('pointerup',   e => { e.preventDefault(); stop(k, btn); });
+    btn.addEventListener('pointercancel', () => stop(k, btn));
+  }
 </script>
 """
+
+
+def _lan_ip():
+    """LAN IP via a dummy UDP connect (no packets sent). Loopback on failure."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _ensure_cert():
+    """Self-signed cert so the phone browser treats the page as a secure
+    context — getUserMedia refuses plain http. openssl ships on macOS and
+    JetPack; the cert lives in ./cert (gitignored). Returns (cert, key)."""
+    root = Path(__file__).resolve().parent.parent / "cert"
+    cert, key = root / "cert.pem", root / "key.pem"
+    if not (cert.exists() and key.exists()):
+        root.mkdir(exist_ok=True)
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key), "-out", str(cert), "-days", "3650",
+             "-subj", "/CN=l6-robot"],
+            check=True, capture_output=True)
+    return str(cert), str(key)
 
 
 def _text(img, s, xy, scale=0.8, color=INK, thick=1):
@@ -189,7 +316,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
                 self.wfile.write(PAGE)
-            elif self.path == "/stream":
+            elif self.path.startswith("/stream"):
                 self.send_response(200)
                 self.send_header(
                     "Content-Type",
@@ -207,11 +334,30 @@ class StreamHandler(BaseHTTPRequestHandler):
                 self.app.keys.put(self.path[-1])
                 self.send_response(204)
                 self.end_headers()
+            elif self.path.startswith("/listen"):
+                # phone pressed hold-to-talk: narrate the beat + grab the crop
+                self.app.on_listen("t" if self.path.endswith("=t") else "a")
+                self.send_response(204)
+                self.end_headers()
             else:
                 self.send_response(404)
                 self.end_headers()
         except (BrokenPipeError, ConnectionResetError):
             pass  # tab closed or refreshed mid-stream
+
+    def do_POST(self):
+        try:
+            if self.path.startswith("/audio"):
+                kind = "t" if self.path.endswith("=t") else "a"
+                n = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(n)
+                self.send_response(self.app.on_audio(kind, body))
+                self.end_headers()
+            else:
+                self.send_response(404)
+                self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 class LiveApp:
@@ -229,6 +375,8 @@ class LiveApp:
         self.jpeg = None   # latest composed view, ready for the stream
         self.keys = queue.Queue()
         self.busy = False  # a voice action is running; ignore T/A meanwhile
+        self.focused = None       # what the loop is attending to (for phone teach)
+        self.pending_crop = None  # crop stashed when the phone starts a teach
         self.stop = threading.Event()
 
     def _detect_loop(self):
@@ -254,22 +402,35 @@ class LiveApp:
             self.jpeg = buf.tobytes()
 
     def _voice_action(self, kind, crop):
-        """Record + transcribe + act, off the main loop so the feed never
-        freezes. One at a time; `busy` gates repeat presses."""
+        """Laptop escape hatch: record via sounddevice, then process. The
+        phone path uploads its own WAV and calls _process directly."""
+        wav = UTTERANCE_WAV
+        self.banner = "LISTENING — speak now"
         try:
-            wav = "/tmp/l6-utterance.wav"
-            self.banner = "LISTENING — speak now"
-            try:
-                audio.record_wav(wav)  # stops itself after trailing silence
-            except Exception as e:
-                print(f"mic failed: {e}")
-                self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
-                return
+            audio.record_wav(wav)  # stops itself after trailing silence
+        except Exception as e:
+            print(f"mic failed: {e}")
+            self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
+            self.busy = False
+            return
+        self._process(kind, wav, crop)
+
+    def _phone_audio(self, kind, body, crop):
+        """Phone hold-to-talk: the uploaded WAV replaces the sounddevice
+        recording; everything downstream is identical to the laptop mic."""
+        wav = UTTERANCE_WAV
+        with open(wav, "wb") as f:
+            f.write(body)
+        self._process(kind, wav, crop)
+
+    def _process(self, kind, wav, crop):
+        """Silence guard → transcribe → teach/ask, off the main loop so the
+        feed never freezes. Shared by both mic paths; clears `busy` when done."""
+        try:
             rms = audio.wav_rms(wav)
             print(f"recorded level (rms): {rms:.0f}"
-                  + ("  <- all zeros: grant the terminal mic permission in "
-                     "System Settings > Privacy > Microphone" if rms == 0
-                     else ""))
+                  + ("  <- all zeros: no audio reached the robot (mic "
+                     "permission?)" if rms == 0 else ""))
             if audio.is_silent(wav):
                 self.banner = "didn't hear anything — try again"
                 return
@@ -293,12 +454,48 @@ class LiveApp:
             self._drain_keys()  # drop presses queued while this ran
             self.busy = False
 
-    def run(self):
+    def on_listen(self, kind):
+        """Phone started hold-to-talk. Narrate LISTENING and, for teach,
+        stash the crop in focus now — the object may drift before release."""
+        self.banner = "LISTENING — speak now"
+        if kind == "t":
+            f = self.focused
+            self.pending_crop = (f.crop.copy()
+                                 if f is not None and f.crop is not None else None)
+
+    def on_audio(self, kind, body):
+        """Phone released hold-to-talk with a WAV. Returns an HTTP status.
+        Mirrors the main loop's busy-gate; the tiny check-then-set race is
+        harmless for a single presenter."""
+        if self.busy:
+            return 409
+        if kind == "t" and self.pending_crop is None:
+            self.banner = "nothing in focus to teach"
+            return 409
+        self.busy = True
+        crop = self.pending_crop if kind == "t" else None
+        threading.Thread(target=self._phone_audio, args=(kind, body, crop),
+                         daemon=True).start()
+        return 202
+
+    def run(self, host="127.0.0.1"):
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
         StreamHandler.app = self
-        server = ThreadingHTTPServer(("127.0.0.1", PORT), StreamHandler)
+        server = ThreadingHTTPServer((host, PORT), StreamHandler)
+        loopback = host in ("127.0.0.1", "localhost")
+        scheme = "http"
+        if not loopback:  # phone mic needs HTTPS (a secure context)
+            try:
+                cert, key = _ensure_cert()
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.load_cert_chain(cert, key)
+                server.socket = ctx.wrap_socket(server.socket, server_side=True)
+                scheme = "https"
+            except Exception as e:
+                print(f"HTTPS setup failed ({e}); serving HTTP — the phone mic "
+                      "will not work, but the stream and REBOOT/quit still do.")
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        url = f"http://127.0.0.1:{PORT}"
+        url = f"{scheme}://{host if loopback else _lan_ip()}:{PORT}"
         print(f"live view: {url}  (keys work in the browser tab)")
 
         def splash(msg):
@@ -312,7 +509,8 @@ class LiveApp:
                 self.jpeg = buf.tobytes()
 
         splash("warming up...")
-        webbrowser.open(url)
+        if loopback:
+            webbrowser.open(url)  # no browser on the headless robot
         models.warm_up(lambda name: splash(f"loading {name}..."))
         splash("loading YOLOE detector...")
         self.robot.detector.warm()
@@ -325,6 +523,7 @@ class LiveApp:
             self.latest = frame
             tracks = list(self.tracks)
             focused = self.robot.focused(tracks)
+            self.focused = focused  # phone teach reads this at hold-start
             self._render(frame, tracks, focused)
             try:
                 key = self.keys.get_nowait()
@@ -400,6 +599,8 @@ def main():
     ap.add_argument("--source", help="image dir or video file (headless)")
     ap.add_argument("--data", default="edge-data", help="shard directory")
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="0.0.0.0 serves the view on the network (phone/iPad)")
     ap.add_argument("--threshold", type=float, default=RECOGNIZE_THRESHOLD,
                     help="recognition threshold (calibration knob; if it "
                          "moves for the shoot, L5 moves with it)")
@@ -414,7 +615,7 @@ def main():
     if args.source:
         replay(robot, args.source)
     else:
-        LiveApp(robot, args.camera).run()
+        LiveApp(robot, args.camera).run(args.host)
 
 
 if __name__ == "__main__":

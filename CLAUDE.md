@@ -2,6 +2,8 @@
 
 Instructor-side demo app for L6 of the DLAI course "Building On-Device AI Memory with Qdrant Edge" (course repo: `../on-device-memory-course`; L6 design docs live in its `.build/design/L6/`). Never shipped to students. Also Dylan's standing booth/talk demo. A continuously-running memory loop on camera + mic: capture → detect → embed → match → teach.
 
+This is a **frozen** single-device build. The full-fledged, evolving version is [memory-fleet](https://github.com/qdrant-labs/memory-fleet) — anything about a fleet, cloud sync, or sharing memories across devices belongs there, not here.
+
 ## The honest-claim contract (hard rules)
 
 The course says on camera "the robot's memory code mirrors what you wrote." Every rule below exists to keep that true:
@@ -10,8 +12,7 @@ The course says on camera "the robot's memory code mirrors what you wrote." Ever
 - `RECOGNIZE_THRESHOLD = 0.80` default, same nearest-match ≥ threshold check as L5. It's a calibration knob (`--threshold`), not scripture — demo quality rules. If live calibration moves it, the course's L5 must be edited to the same number (coherence, not the digit, is the contract).
 - Teach-by-voice writes **one point carrying both named vectors** plus transcript and metadata in the payload. The UI's "MEMORY WRITTEN — vectors: image + text" card is filmed evidence (shotlist shot 2) — don't remove it.
 - Detector labels are discarded: detection finds *a thing*, memory tells it *which* thing. The one use of class names is person/body-part suppression. Never auto-name objects from YOLOE classes.
-- Every score on screen is a live value. **No fabricated output anywhere.** A sync/fleet feature exists only if actually wired.
-- V2 fleet rule: **append-only**. Points are pushed and pulled, never merged, folded, or decayed. If a change needs consolidation logic, it belongs in memory-fleet, not here.
+- Every score on screen is a live value. **No fabricated output anywhere.**
 
 ## Architecture
 
@@ -54,6 +55,5 @@ uv run python -c "import sounddevice; print(sounddevice.query_devices())"  # pic
 
 ## What's next (state at last session)
 
-1. **Single-unit definition of done**: file-mode smoke test passes; mic works live (permission + sounddevice fixed). Still to record: one clean live session — teach by voice → recognize from a new angle → day question → offline reboot — then reconcile the course's `.build/design/L6/SCRIPT.md` (marked PROVISIONAL) against real values.
-2. **V2 — fleet intro**: full build plan and design rules in README.md ("V2: an introduction to the fleet"). Prerequisite refactor (thumbnails → payload base64) is listed there. Check current Edge sync API on skills.qdrant.tech before writing transport code.
-3. **Jetson port**: hardware scoping table + software checklist in README.md. Verify the qdrant-edge-py aarch64 wheel before buying peripherals.
+1. **Single-unit definition of done**: file-mode smoke test passes; the phone-mic path works live over HTTPS (companion view). Still to record: one clean live session — teach by voice → recognize from a new angle → day question → offline reboot — then reconcile the course's `.build/design/L6/SCRIPT.md` (marked PROVISIONAL) against real values.
+2. **Jetson port**: hardware scoping table + software checklist in README.md. Verify the qdrant-edge-py aarch64 wheel before buying peripherals.
