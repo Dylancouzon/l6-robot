@@ -28,11 +28,18 @@ Mic capture shells out to ffmpeg (`brew install ffmpeg`); set `robot/audio.py:MI
 
 Shard data lives in `edge-data/` (gitignored). Delete it for a blank memory.
 
-## V2: curated memories from the cloud (planned, not built)
+## V2: an introduction to the fleet (planned, not built)
 
-For in-person showcases the robot should wake up already knowing things. At startup it pulls a **curated memory set** from Qdrant Cloud — sightings and taught objects that were cleaned and reviewed beforehand — into the local shard, then runs exactly as today: fully local, offline after the sync.
+The fleet concept — memories shared across devices through the cloud — demonstrated with one robot and sequential sessions, no fleet management rebuilt:
 
-- Sync uses Edge's built-in snapshot flow (`snapshot_manifest` / `unpack_snapshot` / `update_from_snapshot`); we own only the transport. No hand-rolled sync.
-- Because the set is reviewed offline, payload metadata (labels, notes, place tags like `desk` / `kitchen`) is trustworthy — so booth questions like "where are my keys?" answer from baseline memory with a photo, a time, and a place.
-- Live teach/recall/forget stay unchanged and write locally; the curated set is the starting point, not a cage.
-- Out of scope for V2: any LLM answer layer, auto-labeling from detector classes, live two-way fleet sync.
+1. **Kitchen session**: teach objects at home. At session end, the local shard's memories upload to a Qdrant Cloud collection (curated/reviewed there as needed).
+2. **Reset**: the robot's local memory is wiped.
+3. **Studio session**: at startup the robot pulls the collection into a fresh local shard. It has never seen the kitchen — but its memory has: "where are my keys?" answers with the kitchen sighting, photo and time, while new studio teaching keeps working and uploads the same way.
+
+Design rules:
+
+- **Append-only.** Devices/sessions push points and pull everyone's; nothing is merged, folded, or decayed. Same object taught twice just means two taught views — nearest-match already handles that. This is the line that keeps V2 from becoming a second [memory-fleet](https://github.com/qdrant-labs/memory-fleet).
+- Push via qdrant-client upserts; pull via Edge's built-in snapshot flow (`snapshot_manifest` / `unpack_snapshot` / `update_from_snapshot`) — the memory-fleet pattern, no hand-rolled sync.
+- Thumbnails move into point payloads (small JPEGs, base64) so a memory is complete wherever it lands — no local file dependencies.
+- After the startup pull, everything stays local and offline, exactly as today.
+- Out of scope: any LLM answer layer, auto-labeling from detector classes, live two-way sync between simultaneously-running units.
