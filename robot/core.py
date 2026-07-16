@@ -20,9 +20,11 @@ def day_start_ts():
 
 class Robot:
     def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
-                 threshold=RECOGNIZE_THRESHOLD, conf=None):
+                 threshold=RECOGNIZE_THRESHOLD, conf=None, max_area=None):
         self.memory = Memory(data_dir, threshold=threshold)
-        self.detector = Detector(weights, **({"conf": conf} if conf else {}))
+        opts = {k: v for k, v in
+                (("conf", conf), ("max_area", max_area)) if v}
+        self.detector = Detector(weights, **opts)
         self.thumbs = Path(data_dir) / "thumbs"
         self.thumbs.mkdir(exist_ok=True)
         self.events = []  # recent memory writes, for the on-screen log
@@ -56,6 +58,7 @@ class Robot:
             t.label = hit.payload["label"] if hit else None
             t.note = hit.payload["transcript"] if hit else None
             t.last_query = now
+            t.crop_q = 0.0  # collect a fresh best crop for the next query
 
         knowns = [t for t in tracks if t.label]
         primary = self.focused(
@@ -74,11 +77,10 @@ class Robot:
 
     @staticmethod
     def focused(tracks):
-        """The teach/recognize subject: the largest stable thing in view."""
-        def area(t):
-            x1, y1, x2, y2 = t.box
-            return (x2 - x1) * (y2 - y1)
-        return max(tracks, key=area) if tracks else None
+        """The teach/recognize subject: the most salient stable thing in
+        view — size weighted by centrality, so the object held to the
+        middle of the frame wins over larger off-center clutter."""
+        return max(tracks, key=lambda t: t.salience) if tracks else None
 
     # -- teach -----------------------------------------------------------------
 

@@ -258,6 +258,7 @@ class LiveApp:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         print("warming up models...")
         models.warm_up()
+        self.robot.detector.warm()
         threading.Thread(target=self._detect_loop, daemon=True).start()
         url = f"http://127.0.0.1:{PORT}"
         print(f"live view: {url}  (keys work in the browser tab)")
@@ -358,9 +359,12 @@ def main():
                          "moves for the shoot, L5 moves with it)")
     ap.add_argument("--conf", type=float, default=None,
                     help="detector confidence floor (raise to track less)")
+    ap.add_argument("--max-area", type=float, default=None,
+                    help="biggest proposal kept, as a frame fraction "
+                         "(default 0.20 drops torso-sized boxes)")
     args = ap.parse_args()
     robot = Robot(data_dir=args.data, threshold=args.threshold,
-                  conf=args.conf)
+                  conf=args.conf, max_area=args.max_area)
     if args.source:
         replay(robot, args.source)
     else:

@@ -7,19 +7,37 @@ sticky per track because classifiers flicker.
 
 Cadence: a track must be stable (N consecutive frames) before it becomes a
 match candidate or teachable, and it re-queries memory every couple of
-seconds, not per frame. Design lifted from qdrant-labs/memory-fleet.
+seconds, not per frame. Design and all tuning constants lifted from
+qdrant-labs/memory-fleet, where they were field-tuned on live desk scenes.
 """
+import os
 import time
 
-CONF = 0.45        # calibration knob (--conf): raise if it tracks everything
+import cv2
+import numpy as np
+
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")  # no pip calls at runtime
+
+try:
+    # torch-MPS autoreleases Metal objects per inference; a pure-Python loop
+    # never drains the pool, leaking ~80 MB/min. Every model call must run
+    # inside this pool so the objects are released each iteration.
+    from objc import autorelease_pool
+except ImportError:  # non-macOS: nothing to drain
+    from contextlib import nullcontext as autorelease_pool
+
+CONF = 0.30        # calibration knob (--conf)
 IMGSZ = 640
-MAX_DET = 16
-MIN_AREA = 0.008   # of frame, drops speckle
-MAX_AREA = 0.55    # drops "the whole desk is one object"
+MAX_DET = 64
+# Normalized box-area band: drops speck noise AND oversized phantom/torso
+# regions. Demo objects are hand-held scale, so the cap stays tight.
+MIN_AREA = 0.0008
+MAX_AREA = 0.20    # calibration knob (--max-area)
 STABLE_FRAMES = 3
 REQUERY_SECONDS = 2.0
 DEAD_SECONDS = 1.5
-PAD = 0.12
+PAD = 0.12         # small margin; the mask removes the background anyway
+FILL = (124, 124, 124)
 
 # People, faces, and body parts are never objects to remember. Word list and
 # matching copied verbatim from memory-fleet's detector (field-tuned there).
@@ -41,14 +59,38 @@ def is_person_like(class_name):
                for w in class_name.lower().replace("-", " ").split())
 
 
-def padded_crop(frame, box):
-    """Crop a detection box with 12% padding, clamped to the frame."""
+def padded_crop(frame, box, mask=None):
+    """Crop with 12% padding; flatten the background to neutral gray inside
+    the segmentation mask. The mask fill is what makes recognition survive
+    background and hand changes (memory-fleet's crops.py, verbatim logic)."""
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
     px, py = (x2 - x1) * PAD, (y2 - y1) * PAD
     x1, y1 = max(0, int(x1 - px)), max(0, int(y1 - py))
     x2, y2 = min(w, int(x2 + px)), min(h, int(y2 + py))
-    return frame[y1:y2, x1:x2]
+    region = frame[y1:y2, x1:x2]
+    if mask is not None and len(mask) >= 3 and region.size:
+        full = np.zeros((h, w), np.uint8)
+        cv2.fillPoly(full, [np.asarray(mask, dtype=np.int32)], 255)
+        full = cv2.dilate(full, np.ones((7, 7), np.uint8), iterations=1)
+        inside = full[y1:y2, x1:x2] > 0
+        region = region.copy()
+        region[~inside] = FILL
+    return region
+
+
+def crop_quality(frame, box, conf):
+    """Bigger, sharper, more confident crops make better object portraits."""
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = (int(v) for v in box)
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return 0.0
+    small = cv2.resize(frame[y1:y2, x1:x2], (96, 96),
+                       interpolation=cv2.INTER_AREA)
+    sharp = cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY),
+                          cv2.CV_32F).var()
+    area = (x2 - x1) * (y2 - y1) / (w * h)
+    return conf * (area ** 0.5) * min(sharp, 1200.0)
 
 
 class Track:
@@ -58,7 +100,9 @@ class Track:
         self.last_seen = 0.0
         self.last_query = 0.0
         self.box = None
-        self.crop = None       # freshest padded crop (BGR)
+        self.crop = None       # best (sharpest) padded crop since last query
+        self.crop_q = 0.0
+        self.salience = 0.0    # size x centrality: what the robot attends to
         self.label = None      # from memory, never from the detector
         self.note = None       # the taught transcript, recalled on match
         self.score = 0.0
@@ -76,11 +120,13 @@ class Track:
 class Detector:
     """YOLOE + BoT-SORT tracking + the stability gate."""
 
-    def __init__(self, weights="yoloe-11l-seg-pf.pt", conf=CONF):
+    def __init__(self, weights="yoloe-11l-seg-pf.pt", conf=CONF,
+                 max_area=MAX_AREA):
         from pathlib import Path
         from ultralytics import YOLO
         import torch
         self.conf = conf
+        self.max_area = max_area
         # resolve against the repo root, not the cwd — otherwise running from
         # another directory silently re-downloads the 70 MB weights
         repo_copy = Path(__file__).resolve().parents[1] / weights
@@ -92,6 +138,12 @@ class Detector:
         self.tracks = {}
         self._person_tids = set()
 
+    def warm(self):
+        dummy = np.zeros((360, 640, 3), dtype=np.uint8)
+        with autorelease_pool():
+            self.model.predict(dummy, device=self.device, imgsz=IMGSZ,
+                               verbose=False)
+
     def reset(self):
         self.tracks.clear()
         self._person_tids.clear()
@@ -102,42 +154,59 @@ class Detector:
     def process(self, frame, now=None):
         """Run detection on one frame; returns live stable tracks."""
         now = now or time.time()
-        results = self.model.track(
-            frame,
-            device=self.device,
-            conf=self.conf,
-            imgsz=IMGSZ,
-            max_det=MAX_DET,
-            agnostic_nms=True,
-            persist=True,
-            verbose=False,
-            # ultralytics >= 8.4 defaults to a tracker that attaches no ids
-            tracker="botsort.yaml",
-        )[0]
+        with autorelease_pool():
+            results = self.model.track(
+                frame,
+                device=self.device,
+                conf=self.conf,
+                imgsz=IMGSZ,
+                max_det=MAX_DET,
+                agnostic_nms=True,
+                persist=True,
+                verbose=False,
+                # ultralytics >= 8.4 defaults to a tracker that attaches no ids
+                tracker="botsort.yaml",
+            )[0]
         h, w = frame.shape[:2]
         seen_tids = set()
         boxes = results.boxes
+        polys = results.masks.xy if results.masks is not None else None
         if boxes is not None and boxes.id is not None:
-            for tid, cls, box in zip(
+            rows = zip(
                 boxes.id.int().tolist(),
                 boxes.cls.int().tolist(),
+                boxes.conf.tolist(),
                 boxes.xyxy.tolist(),
-            ):
+            )
+            for i, (tid, cls, conf, box) in enumerate(rows):
                 if tid in self._person_tids:
                     continue
+                # person check runs before the area band so an oversized face
+                # box still poisons its track id for later, smaller frames
                 if is_person_like(str(self.names.get(cls, ""))):
                     self._person_tids.add(tid)
                     self.tracks.pop(tid, None)
                     continue
                 x1, y1, x2, y2 = box
                 area = (x2 - x1) * (y2 - y1) / (w * h)
-                if not MIN_AREA <= area <= MAX_AREA:
+                if not MIN_AREA <= area <= self.max_area:
                     continue
                 t = self.tracks.setdefault(tid, Track(tid))
                 t.frames += 1
                 t.last_seen = now
                 t.box = box
-                t.crop = padded_crop(frame, box)
+                # attention: size x centrality, so the object held to the
+                # middle of the frame beats larger off-center clutter
+                cx = (x1 + x2) / 2 / w - 0.5
+                cy = (y1 + y2) / 2 / h - 0.5
+                t.salience = (area ** 0.5) * (1 - (cx * cx + cy * cy) ** 0.5)
+                # keep the sharpest crop since the last memory query
+                q = crop_quality(frame, box, conf)
+                if q >= t.crop_q or t.crop is None:
+                    mask = (polys[i] if polys is not None and i < len(polys)
+                            else None)
+                    t.crop = padded_crop(frame, box, mask)
+                    t.crop_q = q
                 seen_tids.add(tid)
 
         if len(self._person_tids) > 4096:  # ids only grow; keep recent flags
