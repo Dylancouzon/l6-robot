@@ -215,6 +215,7 @@ class LiveApp:
         self.mem_count = 0
         self.jpeg = None   # latest composed view, ready for the stream
         self.keys = queue.Queue()
+        self.busy = False  # a voice action is running; ignore T/A meanwhile
         self.stop = threading.Event()
 
     def _detect_loop(self):
@@ -239,21 +240,45 @@ class LiveApp:
         if ok:
             self.jpeg = buf.tobytes()
 
-    def _listen(self, frame, tracks, focused, seconds):
-        wav = "/tmp/l6-utterance.wav"
-        self.banner = "LISTENING — speak now"
-        self._render(frame, tracks, focused)  # show it before recording blocks
+    def _voice_action(self, kind, crop):
+        """Record + transcribe + act, off the main loop so the feed never
+        freezes. One at a time; `busy` gates repeat presses."""
         try:
-            audio.record_wav(wav, seconds)
-        except Exception:
-            self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
-            return None
-        if audio.is_silent(wav):
-            self.banner = "didn't hear anything — try again"
-            return None
-        self.banner = "thinking..."
-        self._render(frame, tracks, focused)
-        return wav
+            wav = "/tmp/l6-utterance.wav"
+            self.banner = "LISTENING — speak now"
+            try:
+                audio.record_wav(wav, 5 if kind == "t" else 4)
+            except Exception as e:
+                print(f"mic failed: {e}")
+                self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
+                return
+            rms = audio.wav_rms(wav)
+            print(f"recorded level (rms): {rms:.0f}"
+                  + ("  <- all zeros: grant the terminal mic permission in "
+                     "System Settings > Privacy > Microphone" if rms == 0
+                     else ""))
+            if audio.is_silent(wav):
+                self.banner = "didn't hear anything — try again"
+                return
+            self.banner = "thinking..."
+            if kind == "t":
+                with self.lock:
+                    taught = self.robot.teach(crop, wav)
+                    self.mem_count = self.robot.memory.count()
+                    for t in self.robot.detector.tracks.values():
+                        t.last_query = 0  # requery now: watch it recognize
+                print(f'taught "{taught["label"]}": {taught["transcript"]!r}')
+                self.card = ("taught", taught)
+                self.banner = f'taught: "{taught["label"]}"'
+            else:
+                with self.lock:
+                    q, res = self.robot.ask_from_wav(wav)
+                print(f"asked: {q!r}")
+                self.card = ("answer", (q, res))
+                self.banner = None
+        finally:
+            self._drain_keys()  # drop presses queued while this ran
+            self.busy = False
 
     def run(self):
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
@@ -294,28 +319,19 @@ class LiveApp:
                 key = None
             if key == "q":
                 break
-            elif key == "t" and focused is not None:
-                crop = focused.crop.copy()
-                wav = self._listen(frame, tracks, focused, 5)
-                if wav is None:
+            elif key == "t" and not self.busy:
+                if focused is None:
+                    self.banner = "nothing in focus to teach"
                     continue
-                with self.lock:
-                    taught = self.robot.teach(crop, wav)
-                    self.mem_count = self.robot.memory.count()
-                    for t in self.robot.detector.tracks.values():
-                        t.last_query = 0  # requery now: watch it recognize
-                self.card = ("taught", taught)
-                self.banner = f'taught: "{taught["label"]}"'
-                self._drain_keys()
-            elif key == "a":
-                wav = self._listen(frame, tracks, focused, 4)
-                if wav is None:
-                    continue
-                with self.lock:
-                    q, res = self.robot.ask_from_wav(wav)
-                self.card = ("answer", (q, res))
-                self.banner = None
-                self._drain_keys()
+                self.busy = True
+                threading.Thread(target=self._voice_action,
+                                 args=("t", focused.crop.copy()),
+                                 daemon=True).start()
+            elif key == "a" and not self.busy:
+                self.busy = True
+                threading.Thread(target=self._voice_action,
+                                 args=("a", None),
+                                 daemon=True).start()
             elif key == "r":
                 with self.lock:
                     n = self.robot.reboot()

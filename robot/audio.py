@@ -41,16 +41,21 @@ def record_wav(path, seconds=5.0):
     return str(path)
 
 
-def is_silent(path, rms_floor=120):
-    """True if the WAV is near-silence. Whisper hallucinates on silence
-    ("Thanks for watching!"), so a failed mic capture must fail visibly
-    instead of teaching a nonsense label."""
+def wav_rms(path):
     import numpy as np
     with wave.open(str(path)) as w:
         samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
     if not len(samples):
-        return True
-    return np.sqrt(np.mean(samples.astype(np.float64) ** 2)) < rms_floor
+        return 0.0
+    return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
+
+
+def is_silent(path, rms_floor=120):
+    """True if the WAV is near-silence. Whisper hallucinates on silence
+    ("Thanks for watching!"), so a failed mic capture must fail visibly
+    instead of teaching a nonsense label. All-zero audio also means macOS
+    hasn't granted the terminal microphone permission."""
+    return wav_rms(path) < rms_floor
 
 
 # ASR often drops the punctuation that would end the naming clause, so the
