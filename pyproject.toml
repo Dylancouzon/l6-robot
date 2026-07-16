@@ -11,5 +11,6 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "pyobjc-core>=12.2.1",
     "qdrant-edge-py==0.7.2",
+    "sounddevice>=0.5.5",
     "ultralytics>=8.4.96",
 ]

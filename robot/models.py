@@ -65,10 +65,13 @@ def transcribe(wav_path):
     return _asr_model().recognize(wav_path).strip()
 
 
-def warm_up():
+def warm_up(progress=lambda name: None):
     """Load every model once so the live loop never stalls mid-demo."""
+    progress("Nomic text encoder")
     embed_text("warm up")
+    progress("CLIP")
     embed_query_clip("warm up")
     import numpy as np
     embed_crop(np.zeros((32, 32, 3), dtype=np.uint8))
+    progress("Whisper")
     _asr_model()

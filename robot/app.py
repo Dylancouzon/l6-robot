@@ -243,7 +243,11 @@ class LiveApp:
         wav = "/tmp/l6-utterance.wav"
         self.banner = "LISTENING — speak now"
         self._render(frame, tracks, focused)  # show it before recording blocks
-        audio.record_wav(wav, seconds)
+        try:
+            audio.record_wav(wav, seconds)
+        except Exception:
+            self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
+            return None
         if audio.is_silent(wav):
             self.banner = "didn't hear anything — try again"
             return None
@@ -256,13 +260,26 @@ class LiveApp:
         StreamHandler.app = self
         server = ThreadingHTTPServer(("127.0.0.1", PORT), StreamHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        print("warming up models...")
-        models.warm_up()
-        self.robot.detector.warm()
-        threading.Thread(target=self._detect_loop, daemon=True).start()
         url = f"http://127.0.0.1:{PORT}"
         print(f"live view: {url}  (keys work in the browser tab)")
+
+        def splash(msg):
+            print(msg)
+            img = np.full((720, 1280 + PANEL_W, 3), BG, np.uint8)
+            _text(img, msg, (400, 350), 1.1, INK, 2)
+            _text(img, "first run downloads the models (~1.5 GB)",
+                  (400, 400), 0.7, VIOLET, 1)
+            ok, buf = cv2.imencode(".jpg", img)
+            if ok:
+                self.jpeg = buf.tobytes()
+
+        splash("warming up...")
         webbrowser.open(url)
+        models.warm_up(lambda name: splash(f"loading {name}..."))
+        splash("loading YOLOE detector...")
+        self.robot.detector.warm()
+        self._drain_keys()  # ignore keys pressed before the feed was live
+        threading.Thread(target=self._detect_loop, daemon=True).start()
         while True:
             ok, frame = self.cap.read()
             if not ok:
