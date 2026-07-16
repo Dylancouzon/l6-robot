@@ -11,10 +11,10 @@ seconds, not per frame. Design lifted from qdrant-labs/memory-fleet.
 """
 import time
 
-CONF = 0.30
+CONF = 0.45        # calibration knob (--conf): raise if it tracks everything
 IMGSZ = 640
 MAX_DET = 16
-MIN_AREA = 0.002   # of frame, drops speckle
+MIN_AREA = 0.008   # of frame, drops speckle
 MAX_AREA = 0.55    # drops "the whole desk is one object"
 STABLE_FRAMES = 3
 REQUERY_SECONDS = 2.0
@@ -62,6 +62,7 @@ class Track:
         self.label = None      # from memory, never from the detector
         self.note = None       # the taught transcript, recalled on match
         self.score = 0.0
+        self.vec = None        # last CLIP embedding of the crop
         self.sighted = False   # one "seen" memory per track, not per frame
 
     @property
@@ -75,10 +76,11 @@ class Track:
 class Detector:
     """YOLOE + BoT-SORT tracking + the stability gate."""
 
-    def __init__(self, weights="yoloe-11l-seg-pf.pt"):
+    def __init__(self, weights="yoloe-11l-seg-pf.pt", conf=CONF):
         from pathlib import Path
         from ultralytics import YOLO
         import torch
+        self.conf = conf
         # resolve against the repo root, not the cwd — otherwise running from
         # another directory silently re-downloads the 70 MB weights
         repo_copy = Path(__file__).resolve().parents[1] / weights
@@ -103,7 +105,7 @@ class Detector:
         results = self.model.track(
             frame,
             device=self.device,
-            conf=CONF,
+            conf=self.conf,
             imgsz=IMGSZ,
             max_det=MAX_DET,
             agnostic_nms=True,

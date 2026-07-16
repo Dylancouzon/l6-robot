@@ -20,9 +20,9 @@ def day_start_ts():
 
 class Robot:
     def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
-                 threshold=RECOGNIZE_THRESHOLD):
+                 threshold=RECOGNIZE_THRESHOLD, conf=None):
         self.memory = Memory(data_dir, threshold=threshold)
-        self.detector = Detector(weights)
+        self.detector = Detector(weights, **({"conf": conf} if conf else {}))
         self.thumbs = Path(data_dir) / "thumbs"
         self.thumbs.mkdir(exist_ok=True)
         self.events = []  # recent memory writes, for the on-screen log
@@ -39,26 +39,38 @@ class Robot:
     # -- the loop --------------------------------------------------------------
 
     def process_frame(self, frame, now=None):
-        """Detect, and for due tracks: embed the crop and match against memory."""
+        """Detect, embed and match due tracks, pick what the robot attends to.
+
+        Every recognized object stays in view, but only ONE unknown at a
+        time — the most prominent — is shown, remembered, and teachable.
+        Other unknowns are ignored: they're clutter, not candidates.
+        """
         now = now or time.time()
         tracks = self.detector.process(frame, now)
         for t in tracks:
             if not t.due_for_query(now):
                 continue
-            vec = models.embed_crop(t.crop)
-            hit, score = self.memory.recognize(vec)
+            t.vec = models.embed_crop(t.crop)
+            hit, score = self.memory.recognize(t.vec)
             t.score = score
             t.label = hit.payload["label"] if hit else None
             t.note = hit.payload["transcript"] if hit else None
             t.last_query = now
-            if not t.sighted:
+
+        knowns = [t for t in tracks if t.label]
+        primary = self.focused(
+            [t for t in tracks if not t.label and t.last_query])
+        display = knowns + ([primary] if primary else [])
+
+        for t in display:
+            if not t.sighted and t.vec is not None:
                 self.memory.remember_sighting(
-                    vec, t.label or "unknown", ts=now,
+                    t.vec, t.label or "unknown", ts=now,
                     thumb=self._thumb(t.crop, t.tid),
                 )
                 t.sighted = True
-                self.log(f"seen: {t.label or 'unknown'} ({score:.2f})")
-        return tracks
+                self.log(f"seen: {t.label or 'unknown'} ({t.score:.2f})")
+        return display
 
     @staticmethod
     def focused(tracks):

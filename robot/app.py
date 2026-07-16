@@ -30,6 +30,7 @@ ORANGE = (0, 152, 255)
 VIOLET = (255, 71, 96)
 PANEL_W = 480
 FONT = cv2.FONT_HERSHEY_DUPLEX
+WIN = "L6 Robot Memory"
 
 
 def _text(img, s, xy, scale=0.8, color=INK, thick=1):
@@ -173,7 +174,7 @@ class LiveApp:
         panel = draw_panel(view.shape[0], self.robot.events, self.mem_count,
                            focused, self.banner, self.card,
                            self.robot.memory.threshold)
-        cv2.imshow("L6 Robot Memory", np.hstack([view, panel]))
+        cv2.imshow(WIN, np.hstack([view, panel]))
 
     def _listen(self, frame, tracks, focused, seconds):
         wav = "/tmp/l6-utterance.wav"
@@ -191,6 +192,11 @@ class LiveApp:
 
     def run(self):
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
+        # WINDOW_NORMAL, created once: the default AUTOSIZE window re-derives
+        # its geometry on every imshow, which on multi-monitor macOS snaps it
+        # back to the original display — sometimes offscreen.
+        cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN, 1280 + PANEL_W, 720)
         print("warming up models...")
         models.warm_up()
         threading.Thread(target=self._detect_loop, daemon=True).start()
@@ -278,8 +284,11 @@ def main():
     ap.add_argument("--threshold", type=float, default=RECOGNIZE_THRESHOLD,
                     help="recognition threshold (calibration knob; if it "
                          "moves for the shoot, L5 moves with it)")
+    ap.add_argument("--conf", type=float, default=None,
+                    help="detector confidence floor (raise to track less)")
     args = ap.parse_args()
-    robot = Robot(data_dir=args.data, threshold=args.threshold)
+    robot = Robot(data_dir=args.data, threshold=args.threshold,
+                  conf=args.conf)
     if args.source:
         replay(robot, args.source)
     else:
