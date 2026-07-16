@@ -1,0 +1,51 @@
+[
+  {
+    "file": "rubberduck_1.jpg",
+    "topic": "rubber duck, view 1",
+    "source": "https://commons.wikimedia.org/wiki/File:Yellow_rubber_duck_in_Rishon_Lezion,_August_2024_05.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Chenspec"
+  },
+  {
+    "file": "rubberduck_2.jpg",
+    "topic": "rubber duck, view 2",
+    "source": "https://commons.wikimedia.org/wiki/File:Yellow_rubber_duck_in_Rishon_Lezion,_August_2024_07.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Chenspec"
+  },
+  {
+    "file": "rubberduck_3.jpg",
+    "topic": "rubber duck, view 3 (held-out)",
+    "source": "https://commons.wikimedia.org/wiki/File:Yellow_rubber_duck_in_Rishon_Lezion,_August_2024_01.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Chenspec"
+  },
+  {
+    "file": "vase_1.jpg",
+    "topic": "ceramic vase, view 1",
+    "source": "https://commons.wikimedia.org/wiki/File:Ceramic_vase_(2024-02-06)_03.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Vyacheslav Kirillin"
+  },
+  {
+    "file": "vase_2.jpg",
+    "topic": "ceramic vase, view 2",
+    "source": "https://commons.wikimedia.org/wiki/File:Ceramic_vase_(2024-02-06)_01.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Vyacheslav Kirillin"
+  },
+  {
+    "file": "vase_3.jpg",
+    "topic": "ceramic vase, view 3 (held-out)",
+    "source": "https://commons.wikimedia.org/wiki/File:Ceramic_vase_(2024-02-06)_02.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "Vyacheslav Kirillin"
+  },
+  {
+    "file": "hardhat_1.jpg",
+    "topic": "welder in a green hard hat, view 1 (foreign probe)",
+    "source": "https://commons.wikimedia.org/wiki/File:Baliwagenyo_welder_with_green_hard_hat_working_atop_a_petrol_station_metal_structure_02.jpg",
+    "license": "CC BY-SA 4.0",
+    "artist": "FBenjr123"
+  }
+]
