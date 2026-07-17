@@ -2,8 +2,6 @@
 __pycache__/
 edge-data*/
 *.pt
-dogfood/
 cert/
 
 PITCH.md
-CLAUDE.md

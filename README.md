@@ -1,60 +1,120 @@
 # l6-robot
 
-![The memory robot — a frosted pebble with a single camera eye and an LED field flickering like an HNSW graph traversal](assets/robot-concept.png)
+![Memory robot concept](assets/robot-concept.png)
 
-> **Frozen course build.** A cut-down snapshot of [qdrant-labs/memory-fleet](https://github.com/qdrant-labs/memory-fleet), simplified for L6 of the Deep Learning course "Building On-Device AI Memory with Qdrant Edge." memory-fleet stays the living project; this repo is the version captured for the course and doesn't track its changes.
+`l6-robot` is the instructor demo for L6 of **Building On-Device AI Memory with Qdrant Edge**. It is a frozen, course-sized snapshot of [qdrant-labs/memory-fleet](https://github.com/qdrant-labs/memory-fleet), trimmed to show one clear loop:
 
-Instructor-side demo, never shipped to students. A memory loop running live on camera and mic: capture → detect → embed → match → teach.
+```text
+camera / mic -> detect -> embed -> match -> teach -> recall
+```
 
-Same stack as the course notebooks: one Qdrant Edge shard (0.7.2) with two named vectors — `text` 768 (Nomic v1.5) and `image` 512 (CLIP ViT-B/32), both via FastEmbed — Whisper-base via onnx-asr for speech, and the same `RECOGNIZE_THRESHOLD = 0.80` nearest-match check as L5. Detection is YOLOE prompt-free, and the labels it produces are discarded — memory decides what a thing is, not the detector. Weights auto-download via ultralytics, or copy `yoloe-11l-seg-pf.pt` into the repo root.
+No LLM runs in this loop. Recognition and recall are vector search and retrieval, not generation.
+
+This repo is not the living product repo. It is the version used for the lesson.
+
+## What It Runs
+
+- **Vector store:** Qdrant Edge `0.7.2`
+- **Vectors:** `text` 768-dim Nomic v1.5 and `image` 512-dim CLIP ViT-B/32, both through FastEmbed
+- **Speech:** Whisper-base through `onnx-asr`
+- **Detection:** YOLOE prompt-free
+- **Recognition rule:** nearest taught view must meet `RECOGNIZE_THRESHOLD = 0.80`
+
+Detector labels are only used to crop objects. The memory layer decides what an object is.
+
+YOLO weights download automatically through Ultralytics. You can also place `yoloe-11l-seg-pf.pt` in the repo root.
 
 ## Run
 
 ```bash
 uv sync
-uv run python -m robot.app                 # live on this machine -> http://127.0.0.1:8765
-uv run python -m robot.app --host 0.0.0.0  # live, reachable from a phone/iPad on the network
-uv run python -m robot.app --source d/     # headless: replay an image dir or video
-uv run python smoke_test.py                # file-mode end-to-end check
+uv run python -m robot.app
 ```
 
-The live view is a browser page (OpenCV's macOS windows misbehave on multi-monitor setups). Controls, in the tab or as touch buttons: **T** teach the focused object by voice ("this is my mug — Maria made it"), **A** ask a question by voice ("what did you see today?"), **R** reboot (close the shard, reload from disk, re-ask), **Q** quit. Every recognized object is shown; only the most prominent unknown is teachable. Calibration knobs: `--threshold` (recognition), `--conf` (detector sensitivity).
+The app opens a browser view at `http://127.0.0.1:8765`.
 
-**Companion view (phone/iPad).** `--host 0.0.0.0` serves the page over HTTPS (a self-signed cert is generated into `cert/` on first run) and prints a `https://<lan-ip>:8765` URL. Open it on the phone, accept the certificate warning once, then **hold TEACH or ASK to record from the phone's own mic** — the clip uploads to the robot, which transcribes and writes the memory. The screen stays awake, and the view fills the phone held in landscape. Two ways to connect, both offline: share a Wi-Fi network, or run the robot's own hotspot — `sudo nmcli device wifi hotspot ssid l6-robot password <pw>`, then `https://10.42.0.1:8765`.
+Useful variants:
 
-On a laptop the keyboard T/A keys record from the machine's own mic via sounddevice (the phone hold-to-talk above is the demo mic); set `robot/audio.py:MIC_DEVICE` if the default input is wrong (`uv run python -c "import sounddevice; print(sounddevice.query_devices())"`).
+```bash
+uv run python -m robot.app --host 0.0.0.0  # phone/iPad on the same network
+uv run python -m robot.app --source d/     # replay an image directory or video
+```
 
-## Layout
+## Controls
 
-- `robot/models.py` — the course's embedding + speech stack, kept aligned with the course repo's `.build/utils/`.
-- `robot/memory.py` — the Edge shard: teach (one point, both named vectors), recognize (nearest taught view vs 0.80), time-filtered day recall grouped seen vs heard.
-- `robot/detect.py` — YOLOE + tracking + the stability/cadence gate (from qdrant-labs/memory-fleet).
-- `robot/core.py` — the loop itself; both front ends drive it.
-- `robot/app.py` — live browser view (local or over the network) and headless replay.
-- `testdata/` — fixture images (Wikimedia Commons, see `CREDITS.json`) and WAVs for the smoke test.
+| Control | Action |
+|---|---|
+| `T` / hold **TEACH** | Teach the focused unknown object by voice |
+| `A` / hold **ASK** | Ask a voice question, such as "what did you see today?" |
+| `R` / **REBOOT** | Close the shard, reload from disk, then re-ask |
+| `Q` / **quit** | Stop the app |
 
-Shard data lives in `edge-data/` (gitignored). Delete it for a blank memory.
+The browser view replaces OpenCV windows, which are unreliable on macOS multi-monitor setups. Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
-## Robot hardware — the memory robot
+Two useful tuning flags:
 
-One self-contained demo unit: a ~140 mm frosted "pebble" (grapefruit-sized) that runs the full loop untethered and films well in a kitchen, a studio, or on a booth table. It's a single build — a demo/booth prop, not a persistent home device.
+```bash
+uv run python -m robot.app --threshold 0.80
+uv run python -m robot.app --conf 0.35
+```
 
-- **Compute inside the body.** The Jetson Orin Nano Super 8 GB (secured) lies flat in the lower half as the weighted base — heaviest part low for stability, hot parts away from the camera. Intake vents underneath, exhaust out the back; the shell is *not* sealed or it thermal-throttles.
-- **One camera "eye"** at front-center behind a clear lens — a UVC USB webcam, plug-and-play on Jetson.
-- **An LED field across the shell.** Addressable LEDs scattered over the translucent upper half, animated as a rolling HNSW-style graph traversal (a node lights, neighbors ripple, a "current" point hops on). Driven straight off the Jetson's SPI header (APA102/DotStar) — **no second board**. These are ambient decoration, not a live data readout, so they stay outside the honest-claim contract; optionally gate the animation on the real recognize loop so each query fires a hop.
-- **No on-robot mic, speaker, or screen.** The companion phone/iPad is the whole interface: the browser UI serves over the robot's network, touch hold-to-talk buttons replace the T/A/R/Q keys, and the phone's mic records teach/ask audio (uploaded to the robot, which still does all transcription and memory work). Near-field phone mic beats a far-field array in a loud hall. The filmed "MEMORY WRITTEN" card lives on this view.
+## Phone Or Tablet Demo
 
-Full parts list and prices (~$362 full, ~$245 lightweight) and the Jetson software port checklist live in **[BOM.md](BOM.md)**.
+Run the app on the robot or laptop with:
 
-### Build tiers — full and lightweight
+```bash
+uv run python -m robot.app --host 0.0.0.0
+```
 
-Two hardware targets share one codebase, selected by a build flipper (planned; **full is the default**):
+The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the self-signed certificate once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
 
-- **Full — Jetson Orin Nano Super 8 GB.** CUDA-accelerated, runs the stack at demo speed. Detector: **`yolo11m-seg`** — the most battle-tested YOLO on Jetson, with a known TensorRT path, and `m` gives the accuracy headroom for small hand-held objects. This is the tier the shotlist and BOM are scoped for.
-- **Lightweight — Raspberry Pi 5 8 GB (experimental).** CPU-only. Qdrant Edge and the ONNX embedders run here as-is. Detector: **`yolo26n-seg`** — YOLO26 is edge-first and NMS-free, so it skips the non-max-suppression step and saves CPU on the hardware that can least afford it; the nano scale keeps it light.
+This works offline in either setup:
 
-Both detectors are closed COCO-80, so either tier only crops objects in those 80 classes — fine for the scripted shoot (mug ≈ `cup`, plus `backpack`, `bottle`, `book`), but pre-check any booth prop maps to a COCO class or it won't be detected. Swapping off YOLOE prompt-free trades open vocabulary for a clean TensorRT path and reliable edge performance.
+- Put the robot and phone on the same Wi-Fi network.
+- Or make the robot a hotspot:
 
-Three things are still open on the lightweight path: the hardware needs a real bench test, `yolo26n-seg` needs tuning for the Pi's CPU (resolution, frame rate), and the flipper that swaps model sets by tier needs building — full is the default. If the Pi's requirements diverge far enough, the lightweight tier moves to its own branch.
+```bash
+sudo nmcli device wifi hotspot ssid l6-robot password <password>
+```
 
-This is a learning build, not a booth-ready one: best if you already have a Pi 5, and CPU-only inference means modest frame rates, not demo-smooth speed. The point is to watch the whole memory loop run end-to-end on a Pi — not to match the Jetson.
+Then open `https://10.42.0.1:8765`.
+
+On a laptop, the `T` and `A` keys use the laptop mic through `sounddevice`. If the wrong input is selected, set `MIC_DEVICE` in `robot/audio.py`. To list devices:
+
+```bash
+uv run python -c "import sounddevice; print(sounddevice.query_devices())"
+```
+
+## Project Layout
+
+| Path | Purpose |
+|---|---|
+| `robot/app.py` | Browser UI, phone controls, live mode, and replay mode |
+| `robot/core.py` | Main robot loop |
+| `robot/detect.py` | YOLOE detection, tracking, and cadence gating |
+| `robot/memory.py` | Qdrant Edge teach, recognize, and day-recall logic |
+| `robot/models.py` | Embedding and speech model setup |
+| `testdata/` | Replay fixtures: images and WAVs |
+
+Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.
+
+## Hardware
+
+The intended hardware is a single demo unit: a frosted, grapefruit-sized shell with a Jetson inside, one USB camera, and a small addressable LED field. It is a filming and booth prop, not a consumer device.
+
+High-level design:
+
+- Jetson Orin Nano Super 8 GB inside the base
+- UVC USB camera as the front "eye"
+- APA102/DotStar LEDs driven from the Jetson SPI header
+- No built-in mic, speaker, or screen; the phone/tablet browser is the interface
+
+The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](BOM.md).
+
+## Build Tiers
+
+**Full build: Jetson Orin Nano Super 8 GB.** This is the default target and the one scoped for demos. It has CUDA headroom for the detector and the rest of the memory stack.
+
+**Lightweight build: Raspberry Pi 5 8 GB.** This path is experimental and CPU-only. Qdrant Edge and the ONNX embedders should run, but detector performance still needs real bench testing and tuning.
+
+Both tiers depend on detector-visible objects. For scripted demos, pre-check that each prop maps to a detectable class.

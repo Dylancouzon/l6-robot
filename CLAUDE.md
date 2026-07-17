@@ -20,9 +20,8 @@ The course says on camera "the robot's memory code mirrors what you wrote." Ever
 - `robot/memory.py` — the Edge shard: `teach` (both vectors), `remember_sighting` (image only), `recognize` (filter `kind=taught`, nearest vs threshold), `day_recall` (both spaces, `ts` range filter, seen/heard never merged), `reopen` (the offline-reboot beat).
 - `robot/detect.py` — YOLOE prompt-free + BoT-SORT + stability/cadence gate + masked crops. All constants field-tuned in memory-fleet; `../hive-mind` is the local reference checkout.
 - `robot/audio.py` — sounddevice push-to-talk with VAD auto-stop, silence guard, label parsing.
-- `robot/core.py` — `Robot`: the loop minus the camera. Both front ends drive it, so the smoke test exercises what the shoot records.
+- `robot/core.py` — `Robot`: the loop minus the camera. Both front ends drive it.
 - `robot/app.py` — live mode (browser view at `http://127.0.0.1:8765`, MJPEG stream, T/A/R/Q keys in the tab) and headless replay (`--source dir|video`).
-- `smoke_test.py` — the contract: teach two views + WAV → held-out ≥ threshold → foreign stays unknown → day question → reboot → all repeats. Run it after every change: `uv run python smoke_test.py`.
 
 ## Field-learned decisions — do not relitigate, recalibrate
 
@@ -41,7 +40,6 @@ The course says on camera "the robot's memory code mirrors what you wrote." Ever
 uv sync
 uv run python -m robot.app                    # live; knobs: --threshold --conf --max-area --camera --data
 uv run python -m robot.app --source testdata  # headless replay
-uv run python smoke_test.py                   # must pass before any commit
 uv run python -c "import sounddevice; print(sounddevice.query_devices())"  # pick MIC_DEVICE if default is wrong
 ```
 
@@ -50,10 +48,9 @@ uv run python -c "import sounddevice; print(sounddevice.query_devices())"  # pic
 - Local git only: **no remote, no push, no publishing** without Dylan's explicit ask. Commit per working milestone.
 - Ponytail applies: smallest app that produces every shotlist beat honestly. No config systems, no plugin architecture, no speculative fleet code.
 - UI: high contrast, readable from across a room, no dark generic-terminal look — these demos run at booths and on camera.
-- Dogfooding by cheap-model subagents goes in `dogfood/` (gitignored), scripted against the `Robot` class; they never edit `robot/`.
-- Fixture images in `testdata/` are Wikimedia Commons — keep `CREDITS.json` 1:1 if any are added.
+- Fixture images in `testdata/` (the `--source` replay sample) are Wikimedia Commons — keep `CREDITS.json` 1:1 if any are added.
 
 ## What's next (state at last session)
 
-1. **Single-unit definition of done**: file-mode smoke test passes; the phone-mic path works live over HTTPS (companion view). Still to record: one clean live session — teach by voice → recognize from a new angle → day question → offline reboot — then reconcile the course's `.build/design/L6/SCRIPT.md` (marked PROVISIONAL) against real values.
+1. **Single-unit definition of done**: the phone-mic path works live over HTTPS (companion view). Still to record: one clean live session — teach by voice → recognize from a new angle → day question → offline reboot — then reconcile the course's `.build/design/L6/SCRIPT.md` (marked PROVISIONAL) against real values.
 2. **Jetson port**: hardware scoping table + software checklist in README.md. Verify the qdrant-edge-py aarch64 wheel before buying peripherals.
