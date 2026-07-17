@@ -1,6 +1,6 @@
 # Bill of materials — the memory robot
 
-One self-contained demo unit: a ~140 mm frosted "pebble" — Jetson inside as a weighted, vented base, a single camera "eye," and addressable LEDs across the shell that flicker like an HNSW graph being walked. Booth/talk prop, single build. Everything runs off the Jetson; the LEDs use SPI (APA102/DotStar) on the 40-pin header, so there's no second microcontroller.
+One self-contained demo unit: a ~140 mm frosted "pebble" — Jetson inside as a weighted, vented base, a single camera "eye," and addressable LEDs across the shell that flicker like an HNSW graph being walked. Booth/talk prop, single build. One board drives the whole unit: the LEDs run on SPI (APA102/DotStar) straight off the Jetson's 40-pin header.
 
 ![Concept render](assets/robot-concept.png)
 
@@ -16,7 +16,7 @@ One self-contained demo unit: a ~140 mm frosted "pebble" — Jetson inside as a 
 | 6 | Untethered power (optional) | **65 W-class** USB-C PD power bank + PD-trigger (20 V) → barrel cable | 55 | Only for a wireless "robot" look on camera; the included 19 V PSU covers any bench or booth-with-outlet shoot. 20 V is in spec — the DC jack accepts 7–20 V. Size at 65 W: MAXN is 25 W module-only, plus camera, NVMe and LEDs. Must sustain 20 V without sagging or auto-sleeping at partial load; test under YOLOE load before any shoot. |
 | 7 | Enclosure | 3D-printed shell, matte PLA/PETG | 6 | Frosted/translucent upper for the LEDs, opaque vented base for the Jetson + fan. Matte finish — glossy throws glare on camera. |
 | 8 | Fasteners + wiring | M2/M3 heat-set inserts, screws, JST leads, short USB cables | 15 | — |
-| | | **Total** | **~$362** | Required parts only; +$57 with the optional power bank and level shifter. The interface is Dylan's own phone (headless robot, no onboard mic/speaker/display) — no BOM line, see the companion-view notes below. |
+| | | **Total** | **~$362** | Required parts only; +$57 with the optional power bank and level shifter. |
 
 ## Budget build (~$295)
 
@@ -33,7 +33,7 @@ The Jetson is the fixed cost and it's already secured, so a tighter BOM trims ac
 Watch out:
 - **microSD** works but reads ~20–40× slower than NVMe — startup model loads add ~10–30 s. Fine for a demo that runs continuously; use an A2-rated card. Bonus: you flash JetPack straight to the card, skipping the x86-host + SDK Manager step for the NVMe (checklist item 2).
 - **Generic camera** — softer image than the C920 (see row 3 for the UVC/CSI notes).
-- **No LEDs** costs only the shimmer wow factor — they're decoration outside the honest-claim contract, so nothing functional is lost. Also drops the SPI wiring and brightness budget.
+- **Drop the LEDs** — the full loop runs unchanged; you lose the shimmer. They're decoration outside the honest-claim contract. Also removes the SPI wiring and brightness budget.
 
 ## Headroom (larger models)
 
