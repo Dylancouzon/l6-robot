@@ -44,4 +44,13 @@ One self-contained demo unit: a ~140 mm frosted "pebble" (grapefruit-sized) that
 - **An LED field across the shell.** Addressable LEDs scattered over the translucent upper half, animated as a rolling HNSW-style graph traversal (a node lights, neighbors ripple, a "current" point hops on). Driven straight off the Jetson's SPI header (APA102/DotStar) — **no second board**. These are ambient decoration, not a live data readout, so they stay outside the honest-claim contract; optionally gate the animation on the real recognize loop so each query fires a hop.
 - **No on-robot mic, speaker, or screen.** The companion phone/iPad is the whole interface: the browser UI serves over the robot's network, touch hold-to-talk buttons replace the T/A/R/Q keys, and the phone's mic records teach/ask audio (uploaded to the robot, which still does all transcription and memory work). Near-field phone mic beats a far-field array in a loud hall. The filmed "MEMORY WRITTEN" card lives on this view.
 
-Full parts list and prices (~$362 full, ~$295 budget) and the Jetson software port checklist live in **[BOM.md](BOM.md)**.
+Full parts list and prices (~$362 full, ~$145 lightweight) and the Jetson software port checklist live in **[BOM.md](BOM.md)**.
+
+### Build tiers — full and lightweight
+
+Two hardware targets share one codebase, selected by a build flipper (planned; **full is the default**):
+
+- **Full — Jetson Orin Nano Super 8 GB.** CUDA-accelerated, runs the stack at demo speed. This is the tier the shotlist and BOM are scoped for.
+- **Lightweight — Raspberry Pi 5 8 GB (experimental).** CPU-only. Qdrant Edge and the ONNX embedders run here as-is; the detector is the open part, since YOLOE prompt-free wants a GPU and has to drop to a smaller CPU variant (e.g. `yolo11n-seg`) at lower resolution.
+
+Three things are still open on the lightweight path: the hardware needs a real bench test, the YOLO model needs adapting for CPU, and the flipper that swaps model sets by tier needs building. If the Pi's requirements diverge far enough, the lightweight tier moves to its own branch. Even if it never matches the Jetson, it's a good hands-on exercise for anyone who already has a Pi 5 on the shelf.

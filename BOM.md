@@ -18,22 +18,21 @@ One self-contained demo unit: a ~140 mm frosted "pebble" — Jetson inside as a 
 | 8 | Fasteners + wiring | M2/M3 heat-set inserts, screws, JST leads, short USB cables | 15 | — |
 | | | **Total** | **~$362** | Required parts only; +$57 with the optional power bank and level shifter. |
 
-## Budget build (~$295)
+## Lightweight build (~$145, experimental)
 
-The Jetson is the fixed cost and it's already secured, so a tighter BOM trims accessories, not compute. Three swaps:
+A second tier on a Raspberry Pi 5 instead of the Jetson — everything runs on CPU. Treat it as a learning build for anyone with a Pi on hand; it's unverified, and the detector still needs adapting (see the build-tier note in the README).
 
-| Swap | Full | Budget | Save |
-|------|------|--------|-----:|
-| Storage | 256 GB NVMe | 256 GB A2 microSD | ~$18 |
-| Camera | C920-class | generic UVC webcam | ~$30 |
-| LEDs + shifter | DotStar strand | drop entirely | ~$14 |
+| # | Part | Pick | ~USD |
+|---|------|------|-----:|
+| 1 | Compute | Raspberry Pi 5 8 GB | 80 |
+| 2 | Cooling | official Active Cooler | 5 |
+| 3 | Power | 27 W USB-C PD PSU | 12 |
+| 4 | Storage | 256 GB A2 microSD | 12 |
+| 5 | Camera | generic UVC webcam | 20 |
+| 6 | Enclosure + wiring | 3D-printed shell, fasteners | 16 |
+| | | **Total** | **~$145** |
 
-**Total ~$295** required (vs $362), or ~$350 with the optional power bank.
-
-Watch out:
-- **microSD** works but reads ~20–40× slower than NVMe — startup model loads add ~10–30 s. Fine for a demo that runs continuously; use an A2-rated card. Bonus: you flash JetPack straight to the card, skipping the x86-host + SDK Manager step for the NVMe (checklist item 2).
-- **Generic camera** — softer image than the C920 (see row 3 for the UVC/CSI notes).
-- **Drop the LEDs** — the full loop runs unchanged; you lose the shimmer. They're decoration outside the honest-claim contract. Also removes the SPI wiring and brightness budget.
+Qdrant Edge (the aarch64 wheel covers the Pi) and the CPU-ONNX embedders run here as-is, the same path glasses_x_edge uses. The detector is the open part: YOLOE prompt-free wants a GPU, so this tier drops to a smaller CPU variant like `yolo11n-seg` at lower resolution and frame rate. LEDs are optional, as on the full build.
 
 ## Headroom (larger models)
 
