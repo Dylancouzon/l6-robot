@@ -35,6 +35,22 @@ CONFIG = EdgeConfig(
 )
 
 
+def _dedupe_by_label(hits):
+    """One entry per label — the nearest view wins (hits arrive score-sorted).
+
+    Re-teaching an object stores extra views (see `teach`), so recall can
+    otherwise list the same label several times.
+    """
+    seen, out = set(), []
+    for h in hits:
+        label = h.payload.get("label")
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append(h)
+    return out
+
+
 class Memory:
     """Store, recognize, recall — the L2–L5 lifecycle behind the robot."""
 
@@ -75,6 +91,9 @@ class Memory:
         self.shard.update(UpdateOperation.upsert_points([
             Point(id=pid, vector=vector, payload=payload)
         ]))
+        # durable now: the offline-reboot beat power-cycles the device, so a
+        # write buffered in the WAL until a clean close() would be lost.
+        self.shard.flush()
         return pid
 
     def teach(self, image_vec, text_vec, label, transcript, ts=None, thumb=None):
@@ -95,6 +114,23 @@ class Memory:
                 "where": self.where,
             },
         )
+
+    def forget(self, label):
+        """Delete every point for a label — taught views and sightings alike.
+
+        The L2 forget beat is `delete_points([id])`; here we gather all ids
+        for the label first so re-taught views (see `teach`) are removed too,
+        not just the matched one.
+        """
+        from qdrant_edge import ScrollRequest
+        # ponytail: full scan, fine at demo scale (tens–hundreds of points)
+        records, _ = self.shard.scroll(
+            ScrollRequest(limit=10000, with_payload=True))
+        ids = [p.id for p in records if p.payload.get("label") == label]
+        if ids:
+            self.shard.update(UpdateOperation.delete_points(ids))
+            self.shard.flush()
+        return len(ids)
 
     def remember_sighting(self, image_vec, label, ts=None, thumb=None):
         """A cadence write: something stable in view, image vector only."""
@@ -133,16 +169,18 @@ class Memory:
         window = Filter(must=[
             FieldCondition(key="ts", range=RangeFloat(gte=since_ts)),
         ])
+        # over-fetch so dedupe still leaves ~limit distinct objects
         heard = self.shard.query(QueryRequest(
             query=Query.Nearest(text_vec, using="text"),
             filter=window,
-            limit=limit,
+            limit=limit * 3,
             with_payload=True,
         ))
         seen = self.shard.query(QueryRequest(
             query=Query.Nearest(clip_text_vec, using="image"),
             filter=window,
-            limit=limit,
+            limit=limit * 3,
             with_payload=True,
         ))
-        return {"seen": seen, "heard": heard}
+        return {"seen": _dedupe_by_label(seen)[:limit],
+                "heard": _dedupe_by_label(heard)[:limit]}

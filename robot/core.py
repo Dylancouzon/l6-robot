@@ -24,7 +24,7 @@ class Robot:
                  where=None):
         self.memory = Memory(data_dir, threshold=threshold, where=where)
         opts = {k: v for k, v in
-                (("conf", conf), ("max_area", max_area)) if v}
+                (("conf", conf), ("max_area", max_area)) if v is not None}
         self.detector = Detector(weights, **opts)
         self.thumbs = Path(data_dir) / "thumbs"
         self.thumbs.mkdir(exist_ok=True)
@@ -44,9 +44,9 @@ class Robot:
     def process_frame(self, frame, now=None):
         """Detect, embed and match due tracks, pick what the robot attends to.
 
-        Every recognized object stays in view, but only ONE unknown at a
-        time — the most prominent — is shown, remembered, and teachable.
-        Other unknowns are ignored: they're clutter, not candidates.
+        Every recognized object stays in view and is logged as a sighting;
+        only ONE unknown at a time — the most prominent — is shown and
+        teachable. Other unknowns are ignored: they're clutter, not candidates.
         """
         now = now or time.time()
         tracks = self.detector.process(frame, now)
@@ -67,13 +67,15 @@ class Robot:
         display = knowns + ([primary] if primary else [])
 
         for t in display:
-            if not t.sighted and t.vec is not None:
+            # only recognized objects are logged: an unnamed thing has no label
+            # or text to recall, so a sighting for it would just clutter recall
+            if t.label and not t.sighted and t.vec is not None:
                 self.memory.remember_sighting(
-                    t.vec, t.label or "unknown", ts=now,
+                    t.vec, t.label, ts=now,
                     thumb=self._thumb(t.crop, t.tid),
                 )
                 t.sighted = True
-                self.log(f"seen: {t.label or 'unknown'} ({t.score:.2f})")
+                self.log(f"seen: {t.label} ({t.score:.2f})")
         return display
 
     @staticmethod
@@ -98,6 +100,19 @@ class Robot:
         )
         self.log(f'taught "{label[:18]}" -> image + text')
         return {"id": pid, "label": label, "transcript": transcript}
+
+    # -- forget / ignore -------------------------------------------------------
+
+    def forget(self, label):
+        """Delete what the robot knows about one recognized object (L2 forget)."""
+        n = self.memory.forget(label)
+        self.log(f'forgot "{label[:18]}" -> {n} point(s)')
+        return n
+
+    def ignore(self, tid):
+        """Dismiss an unknown so the robot stops offering it — clutter you
+        don't want to teach. Sticky per track, like person suppression."""
+        self.detector.ignore(tid)
 
     # -- ask -------------------------------------------------------------------
 

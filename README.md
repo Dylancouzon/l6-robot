@@ -14,7 +14,7 @@ This repo is not the living product repo. It is the version used for the lesson.
 
 ## What It Runs
 
-- **Vector store:** Qdrant Edge `0.7.2`
+- **Vector search:** Qdrant Edge `0.7.2` (embedded, on-device)
 - **Vectors:** `text` 768-dim Nomic v1.5 and `image` 512-dim CLIP ViT-B/32, both through FastEmbed
 - **Speech:** Whisper-base through `onnx-asr`
 - **Detection:** YOLOE prompt-free
@@ -47,7 +47,9 @@ uv run python -m robot.app --source d/     # replay an image directory or video
 | `T` / hold **TEACH** | Teach the focused unknown object by voice |
 | `A` / hold **ASK** | Ask a voice question, such as "what did you see today?" |
 | `R` / **REBOOT** | Close the shard, reload from disk, then re-ask |
-| `Q` / **quit** | Stop the app |
+| `F` / **FORGET** | Delete what it knows about the focused recognized object |
+| `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
+| Ctrl-C | Quit (no on-screen quit — a stray tap won't end the demo) |
 
 The browser view replaces OpenCV windows, which are unreliable on macOS multi-monitor setups. Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
@@ -113,8 +115,8 @@ The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](
 
 ## Build Tiers
 
-**Full build: Jetson Orin Nano Super 8 GB.** This is the default target and the one scoped for demos. It has CUDA headroom for the detector and the rest of the memory stack.
+**Full build: Jetson Orin Nano Super 8 GB.** The default target and the one scoped for demos. It has CUDA headroom for the detector and the rest of the memory stack.
 
-**Lightweight build: Raspberry Pi 5 8 GB.** This path is experimental and CPU-only. Qdrant Edge and the ONNX embedders should run, but detector performance still needs real bench testing and tuning.
+A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference and detector tuning make it unsuitable as a demo target.
 
-Both tiers depend on detector-visible objects. For scripted demos, pre-check that each prop maps to a detectable class.
+The build depends on detector-visible objects. For scripted demos, pre-check that each prop maps to a detectable class.

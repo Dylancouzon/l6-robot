@@ -10,8 +10,10 @@ touch buttons (phone/iPad):
              T / hold TEACH  teach the focused object (speak while held)
              A / hold ASK    ask "what did you see today?" by voice
              R / REBOOT      close the shard, reload from disk, re-ask
-             Q / quit        quit
-On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
+             F / FORGET      delete what it knows about the recognized object
+             Q / IGNORE      dismiss the current unknown (clutter you won't teach)
+Quit with Ctrl-C in the terminal (no on-screen quit — a stray tap would end
+the demo). On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
 --host non-loopback serves HTTPS so the browser will grant mic access.
 """
 import argparse
@@ -60,7 +62,8 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   #teach  { background:#009688 }
   #ask    { background:#6047ff }
   #reboot { background:#20262d }
-  #quit   { flex:0 0 80px; background:#8a8a8a; font-size:15px }
+  #forget { background:#c0392b }
+  #ignore { background:#6b7280 }
   button.rec { box-shadow:0 0 0 4px #fff inset; filter:brightness(1.25) }
   #hint { display:none; position:fixed; top:8px; left:50%;
           transform:translateX(-50%); background:#20262d; color:#fff;
@@ -73,7 +76,8 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     <button id="teach">HOLD&nbsp;&middot;&nbsp;TEACH</button>
     <button id="ask">HOLD&nbsp;&middot;&nbsp;ASK</button>
     <button id="reboot">REBOOT</button>
-    <button id="quit">quit</button>
+    <button id="forget">FORGET</button>
+    <button id="ignore">IGNORE</button>
   </div>
 </div>
 <div id="hint">&#8635; rotate to landscape</div>
@@ -90,10 +94,11 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   // Laptop keyboard drives the sounddevice mic on the machine itself.
   addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
-    if ('tarq'.includes(k)) fetch('/key?k=' + k);
+    if ('tarfq'.includes(k)) fetch('/key?k=' + k);
   });
   $('reboot').onclick = () => fetch('/key?k=r');
-  $('quit').onclick   = () => fetch('/key?k=q');
+  $('forget').onclick = () => fetch('/key?k=f');
+  $('ignore').onclick = () => fetch('/key?k=q');
 
   // Hold TEACH / ASK to record from THIS device's mic and upload one WAV.
   const WORKLET = URL.createObjectURL(new Blob([
@@ -299,7 +304,7 @@ def draw_panel(h, events, count, focused, banner, card,
     for i, e in enumerate(log):
         _text(panel, e[:44], (20, ly + 22 * (i + 1)), 0.55)
     cv2.rectangle(panel, (0, h - 34), (PANEL_W, h), INK, -1)
-    _text(panel, "T teach   A ask   R reboot   Q quit", (20, h - 11),
+    _text(panel, "T teach  A ask  R reboot  F forget  Q ignore", (20, h - 11),
           0.65, (255, 255, 255), 1)
     return panel
 
@@ -386,7 +391,8 @@ class LiveApp:
         self.jpeg = None   # latest composed view, ready for the stream
         self.keys = queue.Queue()
         self.busy = False  # a voice action is running; ignore T/A meanwhile
-        self.focused = None       # what the loop is attending to (for phone teach)
+        self.focused = None       # what the loop is attending to (panel/phone)
+        self.teachable = None     # the salient UNKNOWN — teach target, never a known
         self.pending_crop = None  # crop stashed when the phone starts a teach
         self.stop = threading.Event()
 
@@ -418,13 +424,13 @@ class LiveApp:
         wav = UTTERANCE_WAV
         self.banner = "LISTENING — speak now"
         try:
-            audio.record_wav(wav)  # stops itself after trailing silence
+            spoke = audio.record_wav(wav)  # stops itself after trailing silence
         except Exception as e:
             print(f"mic failed: {e}")
             self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
             self.busy = False
             return
-        self._process(kind, wav, crop)
+        self._process(kind, wav, crop, heard=spoke)
 
     def _phone_audio(self, kind, body, crop):
         """Phone hold-to-talk: the uploaded WAV replaces the sounddevice
@@ -434,15 +440,19 @@ class LiveApp:
             f.write(body)
         self._process(kind, wav, crop)
 
-    def _process(self, kind, wav, crop):
+    def _process(self, kind, wav, crop, heard=None):
         """Silence guard → transcribe → teach/ask, off the main loop so the
-        feed never freezes. Shared by both mic paths; clears `busy` when done."""
+        feed never freezes. Shared by both mic paths; clears `busy` when done.
+
+        `heard` is record_wav's speech flag on the laptop path; the phone WAV
+        passes None and falls back to the RMS guard."""
         try:
             rms = audio.wav_rms(wav)
             print(f"recorded level (rms): {rms:.0f}"
                   + ("  <- all zeros: no audio reached the robot (mic "
                      "permission?)" if rms == 0 else ""))
-            if audio.is_silent(wav):
+            silent = audio.is_silent(wav) if heard is None else not heard
+            if silent:
                 self.banner = "didn't hear anything — try again"
                 return
             self.banner = "thinking..."
@@ -470,14 +480,14 @@ class LiveApp:
         stash the crop in focus now — the object may drift before release."""
         self.banner = "LISTENING — speak now"
         if kind == "t":
-            f = self.focused
+            f = self.teachable
             self.pending_crop = (f.crop.copy()
                                  if f is not None and f.crop is not None else None)
 
     def on_audio(self, kind, body):
         """Phone released hold-to-talk with a WAV. Returns an HTTP status.
-        Mirrors the main loop's busy-gate; the tiny check-then-set race is
-        harmless for a single presenter."""
+        Mirrors the main loop's busy-gate. Serialized by the single phone UI
+        in the demo; add a lock if multiple clients are ever allowed."""
         if self.busy:
             return 409
         if kind == "t" and self.pending_crop is None:
@@ -527,6 +537,17 @@ class LiveApp:
         self.robot.detector.warm()
         self._drain_keys()  # ignore keys pressed before the feed was live
         threading.Thread(target=self._detect_loop, daemon=True).start()
+        try:
+            self._loop()
+        except KeyboardInterrupt:
+            pass  # Ctrl-C is the quit path; fall through to a clean shutdown
+        self.stop.set()
+        server.shutdown()
+        self.cap.release()
+        self.robot.close()
+
+    def _loop(self):
+        """Main thread: pull frames, compose the view, act on key presses."""
         while True:
             ok, frame = self.cap.read()
             if not ok:
@@ -534,27 +555,48 @@ class LiveApp:
             self.latest = frame
             tracks = list(self.tracks)
             focused = self.robot.focused(tracks)
-            self.focused = focused  # phone teach reads this at hold-start
+            self.focused = focused
+            # teach the most salient UNKNOWN, not whatever's focused — a known
+            # object could otherwise steal focus and get relabeled
+            teachable = self.robot.focused([t for t in tracks if not t.label])
+            self.teachable = teachable  # phone teach reads this at hold-start
             self._render(frame, tracks, focused)
             try:
                 key = self.keys.get_nowait()
             except queue.Empty:
                 key = None
-            if key == "q":
-                break
-            elif key == "t" and not self.busy:
-                if focused is None:
-                    self.banner = "nothing in focus to teach"
+            if key == "t" and not self.busy:
+                if teachable is None:
+                    self.banner = "nothing new to teach"
                     continue
                 self.busy = True
                 threading.Thread(target=self._voice_action,
-                                 args=("t", focused.crop.copy()),
+                                 args=("t", teachable.crop.copy()),
                                  daemon=True).start()
             elif key == "a" and not self.busy:
                 self.busy = True
                 threading.Thread(target=self._voice_action,
                                  args=("a", None),
                                  daemon=True).start()
+            elif key == "f":
+                # forget the recognized object the panel is showing (focused)
+                if focused is None or not focused.label:
+                    self.banner = "nothing recognized to forget"
+                else:
+                    with self.lock:
+                        self.robot.forget(focused.label)
+                        self.mem_count = self.robot.memory.count()
+                        for t in self.robot.detector.tracks.values():
+                            t.last_query = 0  # requery: watch it go UNKNOWN
+                    self.banner = f'forgot "{focused.label}"'
+            elif key == "q":
+                # dismiss the current unknown so the robot stops offering it
+                if teachable is None:
+                    self.banner = "no unknown to ignore"
+                else:
+                    with self.lock:
+                        self.robot.ignore(teachable.tid)
+                    self.banner = "ignored — won't track that"
             elif key == "r":
                 with self.lock:
                     n = self.robot.reboot()
@@ -563,10 +605,6 @@ class LiveApp:
                         q = self.card[1][0]
                         self.card = ("answer", (q, self.robot.ask(q)))
                 self.banner = f"rebooted from disk — {n} memories"
-        self.stop.set()
-        server.shutdown()
-        self.cap.release()
-        self.robot.close()
 
     def _drain_keys(self):
         """Drop key presses queued while a blocking teach/ask ran."""
@@ -608,7 +646,11 @@ def replay(robot, source):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source", help="image dir or video file (headless)")
-    ap.add_argument("--data", default="edge-data", help="shard directory")
+    # resolve against the repo root, not cwd — same as the weights path, so
+    # launching from another directory finds the same shard instead of a fresh one
+    ap.add_argument("--data",
+                    default=str(Path(__file__).resolve().parent.parent / "edge-data"),
+                    help="shard directory")
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--host", default="127.0.0.1",
                     help="0.0.0.0 serves the view on the network (phone/iPad)")

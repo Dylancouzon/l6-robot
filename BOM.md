@@ -32,34 +32,13 @@ Recommended target: **Jetson Orin Nano Super 8 GB**.
 
 ## Lightweight Build
 
-Experimental target: **Raspberry Pi 5 8 GB**.
-
-| # | Part | Suggested pick | Est. USD |
-|---|---|---|---:|
-| 1 | Compute | Raspberry Pi 5 8 GB | 175 |
-| 2 | Cooling | Official Active Cooler | 5 |
-| 3 | Power | 27 W USB-C PD PSU | 14 |
-| 4 | Storage | 256 GB A2 microSD | 15 |
-| 5 | Camera | Generic UVC webcam | 20 |
-| 6 | Enclosure and wiring | 3D-printed shell, fasteners, short cables | 16 |
-| | | **Total** | **~$245** |
-
-Treat this as a learning build, especially if you already own a Pi. It is not the default demo target.
-
-Expected constraints:
-
-- CPU-only inference means lower frame rates.
-- Qdrant Edge and the ONNX embedders should run on aarch64.
-- The detector needs separate tuning for resolution, cadence, and model size.
-- LEDs are optional.
+Experimental only. The software should run on a Raspberry Pi 5 (8/16 GB) with a USB webcam, but CPU-only inference means lower frame rates and the detector needs separate tuning for resolution, cadence, and model size. Not a scoped demo target.
 
 ## Model Choices
 
 The full build currently targets the course stack: YOLOE-11L-seg, CLIP ViT-B/32, Nomic v1.5, Whisper-base, and Qdrant Edge.
 
 If the Jetson version moves to a closed COCO detector for better TensorRT support, pre-check every demo object. Props like mugs, bottles, backpacks, and books are safer than unusual objects that may not be detected.
-
-For the Pi path, use a small segmentation detector and expect to tune it. If the Pi setup diverges too much, keep it on a separate branch instead of making the main demo harder to read.
 
 ## Jetson Software Checklist
 

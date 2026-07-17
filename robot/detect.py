@@ -137,6 +137,7 @@ class Detector:
         self.names = self.model.names
         self.tracks = {}
         self._person_tids = set()
+        self._ignored = set()  # unknowns the operator dismissed ("don't track this")
 
     def warm(self):
         dummy = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -144,9 +145,17 @@ class Detector:
             self.model.predict(dummy, device=self.device, imgsz=IMGSZ,
                                verbose=False)
 
+    def ignore(self, tid):
+        """Stop tracking one object for the rest of the session — an unknown
+        the operator doesn't want to teach. Sticky per track id, like the
+        person suppression, so it stays dismissed frame after frame."""
+        self._ignored.add(tid)
+        self.tracks.pop(tid, None)
+
     def reset(self):
         self.tracks.clear()
         self._person_tids.clear()
+        self._ignored.clear()
         predictor = getattr(self.model, "predictor", None)
         for tracker in getattr(predictor, "trackers", None) or []:
             tracker.reset()
@@ -179,7 +188,7 @@ class Detector:
                 boxes.xyxy.tolist(),
             )
             for i, (tid, cls, conf, box) in enumerate(rows):
-                if tid in self._person_tids:
+                if tid in self._person_tids or tid in self._ignored:
                     continue
                 # person check runs before the area band so an oversized face
                 # box still poisons its track id for later, smaller frames

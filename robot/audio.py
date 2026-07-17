@@ -22,6 +22,10 @@ def record_wav(path, max_seconds=8.0):
     the recording (max_seconds is the cap, not the duration). Records at
     the device's native rate (USB mics often refuse 16 kHz), then
     resamples; linear interpolation is plenty for speech.
+
+    Returns True if speech crossed the bar, False if the whole capture
+    stayed below it — a definitive silence signal the caller trusts instead
+    of re-deriving it from the clip's RMS.
     """
     import numpy as np
     import sounddevice as sd
@@ -55,7 +59,7 @@ def record_wav(path, max_seconds=8.0):
         w.setsampwidth(2)
         w.setframerate(16000)
         w.writeframes(samples.tobytes())
-    return str(path)
+    return spoke
 
 
 def wav_rms(path):
@@ -71,7 +75,10 @@ def is_silent(path, rms_floor=120):
     """True if the WAV is near-silence. Whisper hallucinates on silence
     ("Thanks for watching!"), so a failed mic capture must fail visibly
     instead of teaching a nonsense label. All-zero audio also means macOS
-    hasn't granted the terminal microphone permission."""
+    hasn't granted the terminal microphone permission.
+
+    The fallback guard for the phone path, where the uploaded WAV carries no
+    speech flag; the laptop mic uses record_wav's return value instead."""
     return wav_rms(path) < rms_floor
 
 
