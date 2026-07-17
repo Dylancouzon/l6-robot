@@ -18,21 +18,23 @@ One self-contained demo unit: a ~140 mm frosted "pebble" — Jetson inside as a 
 | 8 | Fasteners + wiring | M2/M3 heat-set inserts, screws, JST leads, short USB cables | 15 | — |
 | | | **Total** | **~$362** | Required parts only; +$57 with the optional power bank and level shifter. |
 
-## Lightweight build (~$145, experimental)
+## Lightweight build (~$245, experimental)
 
-A second tier on a Raspberry Pi 5 instead of the Jetson — everything runs on CPU. Treat it as a learning build for anyone with a Pi on hand; it's unverified, and the detector still needs adapting (see the build-tier note in the README).
+A second tier on a Raspberry Pi 5 instead of the Jetson — everything runs on CPU. Treat it as a learning build for anyone who already owns a Pi; it's unverified, and the detector still needs adapting (see the build-tier note in the README).
 
 | # | Part | Pick | ~USD |
 |---|------|------|-----:|
-| 1 | Compute | Raspberry Pi 5 8 GB | 80 |
+| 1 | Compute | Raspberry Pi 5 8 GB | 175 |
 | 2 | Cooling | official Active Cooler | 5 |
-| 3 | Power | 27 W USB-C PD PSU | 12 |
-| 4 | Storage | 256 GB A2 microSD | 12 |
+| 3 | Power | 27 W USB-C PD PSU | 14 |
+| 4 | Storage | 256 GB A2 microSD | 15 |
 | 5 | Camera | generic UVC webcam | 20 |
 | 6 | Enclosure + wiring | 3D-printed shell, fasteners | 16 |
-| | | **Total** | **~$145** |
+| | | **Total** | **~$245** |
 
-Qdrant Edge (the aarch64 wheel covers the Pi) and the CPU-ONNX embedders run here as-is, the same path glasses_x_edge uses. The detector is the open part: YOLOE prompt-free wants a GPU, so this tier drops to a smaller CPU variant like `yolo11n-seg` at lower resolution and frame rate. LEDs are optional, as on the full build.
+The Pi 5 8 GB board is $175 as of April 2026 — the 2026 DRAM shortage pushed it from its $80 launch price, so the lightweight tier is only ~$120 under the far more capable Jetson full build. Its value now is for people who have a Pi already, not as a cheaper new purchase. Expect modest frame rates on CPU: this is a learning build, not a performance target.
+
+Qdrant Edge (the aarch64 wheel covers the Pi) and the CPU-ONNX embedders run here as-is, the same path glasses_x_edge uses. The detector is the open part: YOLOE prompt-free wants a GPU, so this tier drops to a smaller CPU variant like `yolo26n-seg` at lower resolution and frame rate. LEDs are optional, as on the full build.
 
 ## Headroom (larger models)
 
