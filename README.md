@@ -51,7 +51,7 @@ uv run python -m robot.app --source d/     # replay an image directory or video
 | `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
 | Ctrl-C | Quit (no on-screen quit — a stray tap won't end the demo) |
 
-The browser view replaces OpenCV windows, which are unreliable on macOS multi-monitor setups. Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
+Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
 Two useful tuning flags:
 
@@ -109,14 +109,14 @@ High-level design:
 - Jetson Orin Nano Super 8 GB inside the base
 - UVC USB camera as the front "eye"
 - APA102/DotStar LEDs driven from the Jetson SPI header
-- No built-in mic, speaker, or screen; the phone/tablet browser is the interface
+- No built-in mic, speaker, or screen; your phone browser is the interface
 
 The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](BOM.md).
 
 ## Build Tiers
 
-**Full build: Jetson Orin Nano Super 8 GB.** The default target and the one scoped for demos. It has CUDA headroom for the detector and the rest of the memory stack.
+**Full build: Jetson Orin Nano Super 8 GB.** The default target. It has CUDA headroom for the detector and the rest of the memory stack.
 
-A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference and detector tuning make it unsuitable as a demo target.
+A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference makes it should and the detector would need manual tuning.
 
-The build depends on detector-visible objects. For scripted demos, pre-check that each prop maps to a detectable class.
+The build depends on detector-visible objects. 
