@@ -38,8 +38,9 @@ CONFIG = EdgeConfig(
 class Memory:
     """Store, recognize, recall — the L2–L5 lifecycle behind the robot."""
 
-    def __init__(self, data_dir, threshold=RECOGNIZE_THRESHOLD):
+    def __init__(self, data_dir, threshold=RECOGNIZE_THRESHOLD, where=None):
         self.threshold = threshold
+        self.where = where  # place stamped on every write this session (memory-fleet: payload "where")
         self.dir = Path(data_dir)
         if (self.dir / "segments").exists() or any(self.dir.glob("*")):
             self.shard = EdgeShard.load(str(self.dir))
@@ -91,6 +92,7 @@ class Memory:
                 "transcript": transcript,
                 "ts": ts or time.time(),
                 "thumb": thumb,
+                "where": self.where,
             },
         )
 
@@ -103,6 +105,7 @@ class Memory:
                 "label": label,
                 "ts": ts or time.time(),
                 "thumb": thumb,
+                "where": self.where,
             },
         )
 

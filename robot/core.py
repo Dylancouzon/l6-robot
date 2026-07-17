@@ -20,8 +20,9 @@ def day_start_ts():
 
 class Robot:
     def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
-                 threshold=RECOGNIZE_THRESHOLD, conf=None, max_area=None):
-        self.memory = Memory(data_dir, threshold=threshold)
+                 threshold=RECOGNIZE_THRESHOLD, conf=None, max_area=None,
+                 where=None):
+        self.memory = Memory(data_dir, threshold=threshold, where=where)
         opts = {k: v for k, v in
                 (("conf", conf), ("max_area", max_area)) if v}
         self.detector = Detector(weights, **opts)

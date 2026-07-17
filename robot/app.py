@@ -16,6 +16,7 @@ On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
 """
 import argparse
 import queue
+import shutil
 import socket
 import ssl
 import subprocess
@@ -222,12 +223,14 @@ def draw_gauge(panel, y, score, threshold):
 
 
 def draw_panel(h, events, count, focused, banner, card,
-               threshold=RECOGNIZE_THRESHOLD):
+               threshold=RECOGNIZE_THRESHOLD, where=None):
     panel = np.full((h, PANEL_W, 3), BG, dtype=np.uint8)
     cv2.rectangle(panel, (0, 0), (PANEL_W, 54), VIOLET, -1)
     _text(panel, "ROBOT MEMORY", (20, 37), 1.0, (255, 255, 255), 2)
     _text(panel, f"{count} memories", (PANEL_W - 190, 37),
           0.7, (255, 255, 255), 1)
+    if where:
+        _text(panel, f"here: {where}", (20, 80), 0.6, VIOLET, 1)
     y = 100
     if focused is None or not focused.last_query:
         _text(panel, "looking...", (30, y), 0.9)
@@ -252,8 +255,12 @@ def draw_panel(h, events, count, focused, banner, card,
         cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 116), TEAL, 3)
         _text(panel, "MEMORY WRITTEN", (26, y), 0.75, TEAL, 2)
         _text(panel, "vectors: image + text", (26, y + 30), 0.7, INK, 2)
-        for i, line in enumerate(_wrap(f'"{taught["transcript"]}"', 40)[:3]):
-            _text(panel, line, (26, y + 58 + 24 * i), 0.58)
+        ty = y + 58
+        if where:
+            _text(panel, f"here: {where}", (26, y + 54), 0.6, VIOLET, 1)
+            ty = y + 80
+        for i, line in enumerate(_wrap(f'"{taught["transcript"]}"', 40)[:2]):
+            _text(panel, line, (26, ty + 24 * i), 0.58)
     elif card and card[0] == "answer":
         q, res = card[1]
         for line in _wrap(f'Q: "{q}"', 40)[:2]:
@@ -269,7 +276,8 @@ def draw_panel(h, events, count, focused, banner, card,
             when = time.strftime("%H:%M", time.localtime(p["ts"]))
             _text(panel, f"{when}  {p.get('label') or 'unknown'}",
                   (x, y + 22), 0.58)
-            _text(panel, f"score {hit.score:.2f}", (x, y + 46), 0.5,
+            tail = f"{p['where']} · " if p.get("where") else ""
+            _text(panel, f"{tail}score {hit.score:.2f}", (x, y + 46), 0.5,
                   VIOLET, 1)
             y += 62
         y += 12
@@ -280,7 +288,10 @@ def draw_panel(h, events, count, focused, banner, card,
             when = time.strftime("%H:%M", time.localtime(p["ts"]))
             line = _wrap(f"{when}  {what}", 42)[0]
             _text(panel, f"{line}  ({hit.score:.2f})", (30, y), 0.58)
-            y += 24
+            y += 22
+            if p.get("where"):
+                _text(panel, f"   {p['where']}", (30, y), 0.5, VIOLET, 1)
+                y += 20
     log = events[-3:]
     ly = h - 44 - 22 * len(log)
     if log:
@@ -395,7 +406,7 @@ class LiveApp:
         view = draw_feed(frame.copy(), tracks, focused)
         panel = draw_panel(view.shape[0], self.robot.events, self.mem_count,
                            focused, self.banner, self.card,
-                           self.robot.memory.threshold)
+                           self.robot.memory.threshold, self.robot.memory.where)
         ok, buf = cv2.imencode(".jpg", np.hstack([view, panel]),
                                [cv2.IMWRITE_JPEG_QUALITY, 85])
         if ok:
@@ -609,9 +620,19 @@ def main():
     ap.add_argument("--max-area", type=float, default=None,
                     help="biggest proposal kept, as a frame fraction "
                          "(default 0.20 drops torso-sized boxes)")
+    ap.add_argument("--location", default=None,
+                    help='place stamped on memories this session, e.g. '
+                         '"Hotel room" — shown on recall so "where are my keys" '
+                         'points back to where it learned them')
+    ap.add_argument("--reset", action="store_true",
+                    help="wipe the shard dir before starting (clean slate "
+                         "between takes; off the live UI so it can't be tapped)")
     args = ap.parse_args()
+    if args.reset and Path(args.data).exists():
+        shutil.rmtree(args.data)
+        print(f"reset: cleared {args.data}")
     robot = Robot(data_dir=args.data, threshold=args.threshold,
-                  conf=args.conf, max_area=args.max_area)
+                  conf=args.conf, max_area=args.max_area, where=args.location)
     if args.source:
         replay(robot, args.source)
     else:
