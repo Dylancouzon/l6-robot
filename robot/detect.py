@@ -105,6 +105,7 @@ class Track:
         self.salience = 0.0    # size x centrality: what the robot attends to
         self.label = None      # from memory, never from the detector
         self.note = None       # the taught transcript, recalled on match
+        self.thumb = None      # the matched taught view, shown next to the live crop
         self.score = 0.0
         self.vec = None        # last CLIP embedding of the crop
         self.sighted = False   # one "seen" memory per track, not per frame

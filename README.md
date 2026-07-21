@@ -31,14 +31,7 @@ uv sync
 uv run python -m robot.app
 ```
 
-The app opens a browser view at `http://127.0.0.1:8765`.
-
-Useful variants:
-
-```bash
-uv run python -m robot.app --host 0.0.0.0  # phone/iPad on the same network
-uv run python -m robot.app --source d/     # replay an image directory or video
-```
+The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo).
 
 ## Controls
 
@@ -53,12 +46,17 @@ uv run python -m robot.app --source d/     # replay an image directory or video
 
 Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
-Two useful tuning flags:
+### Flags
 
-```bash
-uv run python -m robot.app --threshold 0.80
-uv run python -m robot.app --conf 0.35
-```
+| Flag | What it does |
+|---|---|
+| `--threshold 0.80` | Recognition bar: the nearest taught view must score at least this to count as a match. Raise it if similar objects get confused; lower it if a taught object stops matching from new angles. |
+| `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. |
+| `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. |
+| `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). |
+| `--reset` | Wipe all memories before starting — a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
+| `--camera 1` | Use a different webcam. |
+| `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
 
 ## Phone Or Tablet Demo
 
@@ -110,6 +108,7 @@ High-level design:
 - UVC USB camera as the front "eye"
 - APA102/DotStar LEDs driven from the Jetson SPI header
 - No built-in mic, speaker, or screen; your phone browser is the interface
+- Spoken answers use macOS `say`; on Jetson, swap in `espeak` plus a small USB speaker (without one, the answer stays on-screen only)
 
 The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](BOM.md).
 
@@ -117,6 +116,6 @@ The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](
 
 **Full build: Jetson Orin Nano Super 8 GB.** The default target. It has CUDA headroom for the detector and the rest of the memory stack.
 
-A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference makes it should and the detector would need manual tuning.
+A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference makes it slow and the detector would need manual tuning.
 
 The build depends on detector-visible objects. 

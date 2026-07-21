@@ -8,7 +8,7 @@ The live view is a local web page (OpenCV's macOS windows break on
 multi-monitor setups). Controls, in the browser tab (laptop keys) or as
 touch buttons (phone/iPad):
              T / hold TEACH  teach the focused object (speak while held)
-             A / hold ASK    ask "what did you see today?" by voice
+             A / hold ASK    ask "what did you see today?" by voice (answers out loud on macOS)
              R / REBOOT      close the shard, reload from disk, re-ask
              F / FORGET      delete what it knows about the recognized object
              Q / IGNORE      dismiss the current unknown (clutter you won't teach)
@@ -211,9 +211,8 @@ def draw_feed(frame, tracks, focused):
     return frame
 
 
-def draw_gauge(panel, y, score, threshold):
+def draw_gauge(panel, y, score, threshold, x0=30, x1=PANEL_W - 30):
     """The evidence: live score against the threshold line."""
-    x0, x1 = 30, PANEL_W - 30
     lo, hi = 0.5, 1.0
     px = lambda v: int(x0 + (max(lo, min(hi, v)) - lo) / (hi - lo) * (x1 - x0))
     cv2.rectangle(panel, (x0, y), (x1, y + 26), (225, 222, 215), -1)
@@ -223,37 +222,56 @@ def draw_gauge(panel, y, score, threshold):
     tx = px(threshold)
     cv2.line(panel, (tx, y - 8), (tx, y + 34), INK, 3)
     _text(panel, f"{threshold:.2f}", (tx - 32, y - 14), 0.7, INK, 2)
-    _text(panel, f"{score:.3f}", (x1 - 92, y + 62), 1.0, INK, 2)
-    _text(panel, "match", (x0, y + 62), 0.7)
+    if score > lo:
+        s = f"{score:.3f}"
+        (w, _), _ = cv2.getTextSize(s, FONT, 0.8, 2)
+        _text(panel, s, ((x0 + x1 - w) // 2, y + 58), 0.8, INK, 2)
+
+
+def draw_match(panel, y, focused, threshold):
+    """The match, visible: the remembered view next to the live view, with
+    the score gauge between them — vector similarity an audience can see."""
+    left = (cv2.imread(focused.thumb)
+            if focused is not None and focused.thumb else None)
+    right = focused.crop if focused is not None else None
+    for cap, img, x in (("remembers", left, 30),
+                        ("sees now", right, PANEL_W - 102)):
+        cv2.rectangle(panel, (x, y), (x + 72, y + 72), (225, 222, 215), -1)
+        if img is not None and img.size:
+            panel[y:y + 72, x:x + 72] = cv2.resize(img, (72, 72))
+        (w, _), _ = cv2.getTextSize(cap, FONT, 0.5, 1)
+        _text(panel, cap, (x + 36 - w // 2, y + 90), 0.5, VIOLET, 1)
+    draw_gauge(panel, y + 20, focused.score if focused else 0.0, threshold,
+               x0=118, x1=PANEL_W - 118)
 
 
 def draw_panel(h, events, count, focused, banner, card,
                threshold=RECOGNIZE_THRESHOLD, where=None):
     panel = np.full((h, PANEL_W, 3), BG, dtype=np.uint8)
     cv2.rectangle(panel, (0, 0), (PANEL_W, 54), VIOLET, -1)
-    _text(panel, "ROBOT MEMORY", (20, 37), 1.0, (255, 255, 255), 2)
+    if where:
+        _text(panel, "ROBOT MEMORY", (20, 25), 0.8, (255, 255, 255), 2)
+        _text(panel, f"here: {where}", (20, 46), 0.55, (255, 255, 255), 1)
+    else:
+        _text(panel, "ROBOT MEMORY", (20, 37), 1.0, (255, 255, 255), 2)
     _text(panel, f"{count} memories", (PANEL_W - 190, 37),
           0.7, (255, 255, 255), 1)
-    if where:
-        _text(panel, f"here: {where}", (20, 80), 0.6, VIOLET, 1)
-    y = 100
+    y = 104
     if focused is None or not focused.last_query:
         _text(panel, "looking...", (30, y), 0.9)
     elif focused.label:
         _chip(panel, focused.label, (30, y), TEAL, 1.0)
-        if focused.note:
-            for i, line in enumerate(_wrap(f'"{focused.note}"', 38)[:2]):
-                _text(panel, line, (30, y + 34 + 26 * i), 0.62)
-        y += 34 + 26 * 2
     else:
         _chip(panel, "UNKNOWN — press T to teach", (30, y), RED, 0.85)
-        y += 60
-    draw_gauge(panel, 180, focused.score if focused else 0.0, threshold)
-    y = 290
+    draw_match(panel, 128, focused, threshold)
+    if focused is not None and focused.note:
+        for i, line in enumerate(_wrap(f'"{focused.note}"', 44)[:2]):
+            _text(panel, line, (30, 248 + 24 * i), 0.6)
+    y = 310
     if banner:
         cv2.rectangle(panel, (0, y - 30), (PANEL_W, y + 12), ORANGE, -1)
         _text(panel, banner, (20, y), 0.85, (255, 255, 255), 2)
-    y = 340
+    y = 350
     if card and card[0] == "taught":
         # the shot-2 evidence: one point, both named vectors, the words kept
         taught = card[1]
@@ -266,6 +284,13 @@ def draw_panel(h, events, count, focused, banner, card,
             ty = y + 80
         for i, line in enumerate(_wrap(f'"{taught["transcript"]}"', 40)[:2]):
             _text(panel, line, (26, ty + 24 * i), 0.58)
+    elif card and card[0] == "forgot":
+        # the correction beat: teach wrong -> forget -> watch it go UNKNOWN
+        label, n = card[1]
+        cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 66), RED, 3)
+        _text(panel, "MEMORY DELETED", (26, y), 0.75, RED, 2)
+        _text(panel, f'"{label[:22]}" — {n} point(s) removed', (26, y + 30),
+              0.62, INK, 2)
     elif card and card[0] == "answer":
         q, res = card[1]
         for line in _wrap(f'Q: "{q}"', 40)[:2]:
@@ -288,6 +313,8 @@ def draw_panel(h, events, count, focused, banner, card,
         y += 12
         _text(panel, "HEARD", (20, y + 6), 0.7, INK, 2); y += 30
         for hit in res["heard"][:2]:
+            if y > h - 130:  # stop before the memory-writes log
+                break
             p = hit.payload
             what = p.get("transcript") or p.get("label") or "?"
             when = time.strftime("%H:%M", time.localtime(p["ts"]))
@@ -307,6 +334,32 @@ def draw_panel(h, events, count, focused, banner, card,
     _text(panel, "T teach  A ask  R reboot  F forget  Q ignore", (20, h - 11),
           0.65, (255, 255, 255), 1)
     return panel
+
+
+def _speak(q, res):
+    """Say the answer out loud — every spoken value is a live payload field.
+    macOS `say`; the Jetson port swaps in espeak."""
+    seen = res["seen"]
+    if not seen:
+        line = "I didn't see anything like that today."
+    elif "what did you see" in q.lower():
+        # the day-inventory question lists the objects; anything else answers
+        # with the top hit. ponytail: one phrase check, not intent parsing —
+        # the demo script asks this exact question
+        labels = [h.payload.get("label") or "something" for h in seen[:3]]
+        names = (", ".join(labels[:-1]) + f" and {labels[-1]}"
+                 if len(labels) > 1 else labels[0])
+        line = f"Today I saw {names}."
+    else:
+        p = seen[0].payload
+        when = time.strftime("%-I:%M %p", time.localtime(p["ts"]))
+        line = f"I saw {p.get('label') or 'something'} at {when}"
+        if p.get("where"):
+            line += f", in {p['where']}"
+        line += "."
+    if shutil.which("say"):
+        subprocess.Popen(["say", line])
+    return line
 
 
 def _wrap(s, width):
@@ -471,6 +524,7 @@ class LiveApp:
                 print(f"asked: {q!r}")
                 self.card = ("answer", (q, res))
                 self.banner = None
+                _speak(q, res)
         finally:
             self._drain_keys()  # drop presses queued while this ran
             self.busy = False
@@ -584,10 +638,11 @@ class LiveApp:
                     self.banner = "nothing recognized to forget"
                 else:
                     with self.lock:
-                        self.robot.forget(focused.label)
+                        n = self.robot.forget(focused.label)
                         self.mem_count = self.robot.memory.count()
                         for t in self.robot.detector.tracks.values():
                             t.last_query = 0  # requery: watch it go UNKNOWN
+                    self.card = ("forgot", (focused.label, n))
                     self.banner = f'forgot "{focused.label}"'
             elif key == "q":
                 # dismiss the current unknown so the robot stops offering it
@@ -599,12 +654,12 @@ class LiveApp:
                     self.banner = "ignored — won't track that"
             elif key == "r":
                 with self.lock:
-                    n = self.robot.reboot()
+                    n, ms = self.robot.reboot()
                     self.mem_count = n
                     if self.card and self.card[0] == "answer":
                         q = self.card[1][0]
                         self.card = ("answer", (q, self.robot.ask(q)))
-                self.banner = f"rebooted from disk — {n} memories"
+                self.banner = f"rebooted in {ms:.0f} ms — {n} memories"
 
     def _drain_keys(self):
         """Drop key presses queued while a blocking teach/ask ran."""

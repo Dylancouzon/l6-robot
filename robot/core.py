@@ -58,6 +58,7 @@ class Robot:
             t.score = score
             t.label = hit.payload["label"] if hit else None
             t.note = hit.payload["transcript"] if hit else None
+            t.thumb = hit.payload.get("thumb") if hit else None
             t.last_query = now
             t.crop_q = 0.0  # collect a fresh best crop for the next query
 
@@ -132,11 +133,13 @@ class Robot:
 
     def reboot(self):
         """Close the shard, reload from disk. Recognition state resets too."""
+        t0 = time.perf_counter()
         self.memory.reopen()
+        ms = (time.perf_counter() - t0) * 1000
         self.detector.reset()
         n = self.memory.count()
-        self.log(f"shard reopened from disk — {n} memories")
-        return n
+        self.log(f"shard reopened in {ms:.0f} ms — {n} memories")
+        return n, ms
 
     def close(self):
         self.memory.close()
