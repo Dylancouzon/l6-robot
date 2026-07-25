@@ -118,4 +118,4 @@ The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](
 
 A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference makes it slow and the detector would need manual tuning.
 
-The build depends on detector-visible objects. 
+The build depends on detector-visible objects.
