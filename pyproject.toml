@@ -3,14 +3,18 @@ name = "l6-robot"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "fastembed>=0.8.0",
+    # The encoder stack is pinned to the same versions as the course, because
+    # the 0.80 recognition threshold is calibrated against these exact
+    # encoders. Changing one moves every score.
+    "fastembed==0.8.0",
+    "numpy==2.5.1",
+    "onnx-asr==0.12.0",
+    "onnxruntime==1.27.0",
+    "qdrant-edge-py==0.7.2",
+    # Robot-only pieces: camera, detector, tracker, mic.
     "lap>=0.5.13",
-    "numpy>=2.5.1",
-    "onnx-asr>=0.12.0",
-    "onnxruntime>=1.27.0",
     "opencv-python>=5.0.0.93",
     "pyobjc-core>=12.2.1; sys_platform == 'darwin'",  # macOS-only MPS leak fix; no Linux wheels exist
-    "qdrant-edge-py==0.7.2",
     "sounddevice>=0.5.5",
     "ultralytics>=8.4.96",
 ]

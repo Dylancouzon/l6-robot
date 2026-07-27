@@ -262,7 +262,7 @@ def draw_panel(h, events, count, focused, banner, card,
     elif focused.label:
         _chip(panel, focused.label, (30, y), TEAL, 1.0)
     else:
-        _chip(panel, "UNKNOWN — press T to teach", (30, y), RED, 0.85)
+        _chip(panel, "UNKNOWN · press T to teach", (30, y), RED, 0.85)
     draw_match(panel, 128, focused, threshold)
     if focused is not None and focused.note:
         for i, line in enumerate(_wrap(f'"{focused.note}"', 44)[:2]):
@@ -289,7 +289,7 @@ def draw_panel(h, events, count, focused, banner, card,
         label, n = card[1]
         cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 66), RED, 3)
         _text(panel, "MEMORY DELETED", (26, y), 0.75, RED, 2)
-        _text(panel, f'"{label[:22]}" — {n} point(s) removed', (26, y + 30),
+        _text(panel, f'"{label[:22]}" · {n} point(s) removed', (26, y + 30),
               0.62, INK, 2)
     elif card and card[0] == "answer":
         q, res = card[1]
@@ -475,12 +475,12 @@ class LiveApp:
         """Laptop escape hatch: record via sounddevice, then process. The
         phone path uploads its own WAV and calls _process directly."""
         wav = UTTERANCE_WAV
-        self.banner = "LISTENING — speak now"
+        self.banner = "LISTENING · speak now"
         try:
             spoke = audio.record_wav(wav)  # stops itself after trailing silence
         except Exception as e:
             print(f"mic failed: {e}")
-            self.banner = "mic failed — check MIC_DEVICE in robot/audio.py"
+            self.banner = "mic failed: check MIC_DEVICE in robot/audio.py"
             self.busy = False
             return
         self._process(kind, wav, crop, heard=spoke)
@@ -506,7 +506,7 @@ class LiveApp:
                      "permission?)" if rms == 0 else ""))
             silent = audio.is_silent(wav) if heard is None else not heard
             if silent:
-                self.banner = "didn't hear anything — try again"
+                self.banner = "didn't hear anything, try again"
                 return
             self.banner = "thinking..."
             if kind == "t":
@@ -532,7 +532,7 @@ class LiveApp:
     def on_listen(self, kind):
         """Phone started hold-to-talk. Narrate LISTENING and, for teach,
         stash the crop in focus now — the object may drift before release."""
-        self.banner = "LISTENING — speak now"
+        self.banner = "LISTENING · speak now"
         if kind == "t":
             f = self.teachable
             self.pending_crop = (f.crop.copy()
@@ -567,7 +567,7 @@ class LiveApp:
                 server.socket = ctx.wrap_socket(server.socket, server_side=True)
                 scheme = "https"
             except Exception as e:
-                print(f"HTTPS setup failed ({e}); serving HTTP — the phone mic "
+                print(f"HTTPS setup failed ({e}); serving HTTP, so the phone mic "
                       "will not work, but the stream and REBOOT/quit still do.")
         threading.Thread(target=server.serve_forever, daemon=True).start()
         url = f"{scheme}://{host if loopback else _lan_ip()}:{PORT}"
@@ -651,7 +651,7 @@ class LiveApp:
                 else:
                     with self.lock:
                         self.robot.ignore(teachable.tid)
-                    self.banner = "ignored — won't track that"
+                    self.banner = "ignored, won't track that"
             elif key == "r":
                 with self.lock:
                     n, ms = self.robot.reboot()
@@ -659,7 +659,7 @@ class LiveApp:
                     if self.card and self.card[0] == "answer":
                         q = self.card[1][0]
                         self.card = ("answer", (q, self.robot.ask(q)))
-                self.banner = f"rebooted in {ms:.0f} ms — {n} memories"
+                self.banner = f"rebooted in {ms:.0f} ms · {n} memories"
 
     def _drain_keys(self):
         """Drop key presses queued while a blocking teach/ask ran."""
@@ -719,7 +719,7 @@ def main():
                          "(default 0.20 drops torso-sized boxes)")
     ap.add_argument("--location", default=None,
                     help='place stamped on memories this session, e.g. '
-                         '"Hotel room" — shown on recall so "where are my keys" '
+                         '"Hotel room", shown on recall so "where are my keys" '
                          'points back to where it learned them')
     ap.add_argument("--reset", action="store_true",
                     help="wipe the shard dir before starting (clean slate "

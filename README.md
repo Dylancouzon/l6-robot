@@ -12,6 +12,22 @@ No LLM runs in this loop. Recognition and recall are vector search and retrieval
 
 This repo is not the living product repo. It is the version used for the lesson.
 
+## What You Already Built
+
+Every stage of this loop comes from a lesson notebook. Two of them are new.
+
+| Loop stage | Where it comes from |
+|---|---|
+| Mic to transcript | L4 |
+| Frame, embed, match against the threshold | L5 |
+| Store, recall, forget | L2 |
+| Cross-modal recall over photos, voice, and text | L3 and L4 |
+| One shard, two skills, offline | L5 |
+| Detect and crop objects in a cluttered frame | New here |
+| Deciding when a memory is worth writing | New here |
+
+The two new stages stay black boxes on purpose. A detector finds *a thing*; the memory layer decides *which* thing.
+
 ## What It Runs
 
 - **Vector search:** Qdrant Edge `0.7.2` (embedded, on-device)
@@ -42,7 +58,7 @@ The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a
 | `R` / **REBOOT** | Close the shard, reload from disk, then re-ask |
 | `F` / **FORGET** | Delete what it knows about the focused recognized object |
 | `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
-| Ctrl-C | Quit (no on-screen quit — a stray tap won't end the demo) |
+| Ctrl-C | Quit (no on-screen quit, so a stray tap won't end the demo) |
 
 Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
@@ -54,7 +70,7 @@ Every recognized object is drawn on screen. Only the most prominent unknown obje
 | `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. |
 | `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. |
 | `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). |
-| `--reset` | Wipe all memories before starting — a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
+| `--reset` | Wipe all memories before starting, for a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
 | `--camera 1` | Use a different webcam. |
 | `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
 

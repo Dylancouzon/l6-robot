@@ -1,8 +1,9 @@
 """The course's exact model stack: Nomic 768 (text), CLIP 512 (image), Whisper.
 
-Same models, same FastEmbed/onnx-asr loaders as the course notebooks — the
-"same stack" claim in L6 depends on this file staying aligned with
-on-device-memory-course/.build/utils/{embeddings,audio}.py.
+Same models and the same FastEmbed and onnx-asr loaders as the course
+notebooks. The "same stack" claim in L6 depends on this file staying aligned
+with the course's helper.py, and on the pinned versions in pyproject.toml:
+the 0.80 recognition threshold is calibrated against those exact encoders.
 """
 from functools import lru_cache
 

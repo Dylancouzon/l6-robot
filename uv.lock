@@ -652,11 +652,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastembed", specifier = ">=0.8.0" },
+    { name = "fastembed", specifier = "==0.8.0" },
     { name = "lap", specifier = ">=0.5.13" },
-    { name = "numpy", specifier = ">=2.5.1" },
-    { name = "onnx-asr", specifier = ">=0.12.0" },
-    { name = "onnxruntime", specifier = ">=1.27.0" },
+    { name = "numpy", specifier = "==2.5.1" },
+    { name = "onnx-asr", specifier = "==0.12.0" },
+    { name = "onnxruntime", specifier = "==1.27.0" },
     { name = "opencv-python", specifier = ">=5.0.0.93" },
     { name = "pyobjc-core", marker = "sys_platform == 'darwin'", specifier = ">=12.2.1" },
     { name = "qdrant-edge-py", specifier = "==0.7.2" },
