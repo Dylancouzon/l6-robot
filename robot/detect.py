@@ -134,7 +134,12 @@ class Detector:
         if not Path(weights).exists() and repo_copy.exists():
             weights = str(repo_copy)
         self.model = YOLO(weights)
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         self.names = self.model.names
         self.tracks = {}
         self._person_tids = set()
