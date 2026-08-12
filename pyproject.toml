@@ -15,6 +15,7 @@ dependencies = [
     "lap>=0.5.13",
     "opencv-python>=5.0.0.93",
     "pyobjc-core>=12.2.1; sys_platform == 'darwin'",  # macOS-only MPS leak fix; no Linux wheels exist
+    "python-dotenv>=1.2.2",  # reads .env, where the per-camera thresholds live
     "sounddevice>=0.5.5",
     "ultralytics>=8.4.96",
     # Ultralytics would pull Torch in transitively, letting a resolver pick the
