@@ -17,4 +17,10 @@ dependencies = [
     "pyobjc-core>=12.2.1; sys_platform == 'darwin'",  # macOS-only MPS leak fix; no Linux wheels exist
     "sounddevice>=0.5.5",
     "ultralytics>=8.4.96",
+    # Ultralytics would pull Torch in transitively, letting a resolver pick the
+    # build. Pin it instead: these are the versions the detector is tested on,
+    # and the stock CUDA wheel is the one that runs on a Jetson Orin (see
+    # README, "Running on a Jetson Orin Nano").
+    "torch==2.13.0",
+    "torchvision==0.28.0",
 ]

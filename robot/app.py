@@ -411,7 +411,7 @@ class StreamHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
             pass  # tab closed or refreshed mid-stream
 
     def do_POST(self):
@@ -425,7 +425,7 @@ class StreamHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
             pass
 
 
@@ -509,9 +509,12 @@ class LiveApp:
                 self.banner = "didn't hear anything, try again"
                 return
             self.banner = "thinking..."
+            # Whisper takes seconds; run it before claiming the lock so the
+            # detector keeps tracking while the robot listens.
+            q = models.transcribe(wav)
             if kind == "t":
                 with self.lock:
-                    taught = self.robot.teach(crop, wav)
+                    taught = self.robot.teach(crop, q)
                     self.mem_count = self.robot.memory.count()
                     for t in self.robot.detector.tracks.values():
                         t.last_query = 0  # requery now: watch it recognize
@@ -520,7 +523,7 @@ class LiveApp:
                 self.banner = f'taught: "{taught["label"]}"'
             else:
                 with self.lock:
-                    q, res = self.robot.ask_from_wav(wav)
+                    res = self.robot.ask(q)
                 print(f"asked: {q!r}")
                 self.card = ("answer", (q, res))
                 self.banner = None
