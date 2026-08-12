@@ -36,6 +36,14 @@ keeping the browser mic open. See "The voice path" below. **Not yet confirmed by
 the operator**, and one limit is unfixed: whisper-base mishears bare single
 words, so the demo script should say "this is my laptop".
 
+**Seventh milestone, same day: the panel became HTML.** The UI was one
+composited JPEG — panel drawn with `cv2.putText` at a fixed 480 px and
+`hstack`ed onto the feed — which made "mobile responsive" structurally
+impossible. The stream now carries the annotated feed only and the page polls
+`/state`. **Verified on this box** (endpoints, memory, threads, an A/B on
+bandwidth); **not yet looked at by the operator on a phone.** See "The panel is
+HTML now" below.
+
 ## Goal and constraints
 
 - Target: Jetson Orin Nano Super 8 GB, Ubuntu 24.04/aarch64, Jetson Linux R39.2 /
@@ -707,6 +715,80 @@ Two details worth keeping:
 The mic staying open means a permanent recording indicator in the browser. That
 is the price, and it is in the README.
 
+## The panel is HTML now — the UI was one composited JPEG
+
+"Ugly, unreadable, not mobile responsive" were one structural fact: **the panel
+was pixels drawn into the video**, fixed at 480 px and `hstack`ed onto the feed.
+On a phone in portrait the browser contains a 2.44:1 image into ~160 pt of
+height, so the panel rendered about **100 pt wide** — which no font-size tuning
+fixes, and which is why the page used to carry a "rotate to landscape" nag.
+
+`/stream` now carries the annotated feed alone; the page polls `/state` (JSON,
+4 Hz) and renders the panel as DOM. Gone: `draw_panel`, `draw_gauge`,
+`draw_match`, `_thumb_img`, `_wrap`. `draw_feed`/`_chip` stay — boxes and their
+labels do belong in the video. Two supporting endpoints: `/thumb?f=NAME`
+(`Path(name).name`'d, so nothing outside the thumbs dir is reachable however
+the query is written) and `/crop.jpg` (the live "sees now" crop, encoded per
+request, 404 when nothing holds focus).
+
+Measured here: **~13% fewer bytes**, A/B on one scene, 49 frames in 5 s either
+way, 241 KB composed vs 210 KB feed-only. Do not sell this as a bandwidth fix —
+a flat panel of text is cheap to JPEG, and the camera view was always the
+expensive part. RSS/threads unmoved at 2.47 GB / 19 under sustained polling.
+
+### Decisions — don't reopen
+
+- **REBOOT lost its button; the `R` key stays.** The operator asked why it
+  existed, believing it wiped memories. It does the opposite, but a control
+  named after its mechanism taught nobody that, and a robot on its own Wi-Fi
+  with no internet already makes the point. The wipe is `--reset`, still
+  CLI-only. Four buttons fit a phone; five did not, so this also removed the
+  need for an overflow tray.
+- **No device split.** "Desktop only" was rejected for REBOOT: the appliance is
+  headless, so the phone is the only UI it has.
+- **Polling, not SSE.** `protocol_version` stays HTTP/1.0, so each poll is its
+  own connection — measured as costing nothing. Moving to 1.1 needs an accurate
+  `Content-Length` on *every* response or clients hang.
+- **Never build the panel with `innerHTML`** — labels and notes are whatever
+  Whisper heard. The page goes through a small `el()` helper using
+  `textContent`.
+- **Browser speech (`speechSynthesis`) considered, not done.** It would fix the
+  Jetson answering silently, but it double-speaks on a macOS host driving its
+  own tab, and iOS wants a gesture the ~16 s round trip has outlived.
+  `_answer_line` is split out of `_speak` so the panel at least shows the
+  sentence.
+
+### Found by adversarial review, closed
+
+- **The feed could not shrink, so a landscape phone got no panel at all.**
+  `#view` was `flex:0 0 auto` with no cap, and `#side` is `flex:1` — basis 0,
+  so it contributes nothing to the used height and cannot push the feed back. A
+  full-width 16:9 image is exactly the height of a 667x375 viewport, so the
+  panel computed to **zero**: precisely the failure this change exists to fix,
+  reintroduced by dropping `flex:1; min-height:0` from `#view`. Fixed with
+  `max-height:50vh` in the column layout (reset to `none` in the row layout, or
+  it clamps the feed there too), and the row breakpoint lowered to 640 px so
+  landscape phones get the side-by-side layout at all.
+- **`banner` is a property so that assigning it bumps a counter.** The page
+  hides a status line after 6 s, and keyed on the *text* it could not tell a
+  stale message from the same message sent again — press IGNORE twice a minute
+  apart and the second press was silent. `status_seq` is the fix; don't
+  "simplify" the property away. Verified: three identical FORGET refusals
+  produce three distinct seq values.
+- **`/state` sends `Cache-Control: no-store`.** Nothing else stops a client
+  caching it, and a frozen panel beside a moving video is a horrible thing to
+  diagnose in a room.
+- **`PAGE` is a bytes literal, so it is ASCII-only, comments included.** An em
+  dash in a CSS comment is a `SyntaxError`, not a rendering bug. There is a note
+  above the literal.
+
+### Not verified
+
+**Nobody has seen it on a phone.** Firefox is installed but headless screenshots
+do not run under snap confinement here, so the layout is checked by endpoint
+tests and by construction, not by eye. Judge the portrait split and whether the
+type reads across a room; `#label` is `clamp(20px,4.5vw,30px)`.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -726,11 +808,13 @@ Useful reference numbers; re-measure before trusting them after any change.
 - Same app as a systemd service, no desktop session: **2.3–2.5 GB / 19 threads**,
   i.e. no penalty for running headless. A clean `systemctl stop` takes 3–5 s, all
   of it the shard close. The desktop it replaces was holding ~1.5 GB.
-- MJPEG stream: composed frame is 1760x720, **183 KB at quality 85**, so the
-  feed costs **~13 Mbps** at the camera's 10 fps — by far the largest thing the
-  demo puts on the network. Was 37 Mbps before the duplicate-frame fix. The
-  hotspot (5 GHz, HT20) carries it with room; 2.4 GHz did not. See "Streaming
-  over the hotspot".
+- MJPEG stream: the frame is 1280x720 since the panel moved to HTML. **Scene
+  dominates size**, so re-measure rather than quoting: 210 KB at quality 85 on a
+  cluttered desk (**~17 Mbps** at the camera's 10 fps), against 183 KB recorded
+  earlier for the 1760x720 composed frame on a tidier scene. Same-scene A/B of
+  the change itself: 241 KB composed vs 210 KB feed-only, 49 frames in 5 s
+  either way — **~13%**. Was 37 Mbps before the duplicate-frame fix. The hotspot
+  (5 GHz, HT20) carries it; 2.4 GHz did not. See "Streaming over the hotspot".
 - Score parity (must hold), from the rewritten `verify_scores.py`, which crops
   **with the mask** as the app does: same-object min 0.887 / median 0.920,
   different-object median 0.472 / max 0.611, margin +0.275. The older numbers

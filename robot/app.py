@@ -5,13 +5,16 @@
     uv run python -m robot.app --source DIR    # headless: replay images/video
 
 The live view is a local web page (OpenCV's macOS windows break on
-multi-monitor setups). Controls, in the browser tab (laptop keys) or as
-touch buttons (phone/iPad):
+multi-monitor setups). The page streams the annotated camera feed and polls
+`/state` for everything else, so the panel is HTML rather than pixels drawn
+into the video — which is what lets it lay out for a phone. Controls, in the
+browser tab (laptop keys) or as touch buttons (phone/iPad):
              T / hold TEACH  teach the focused object (speak while held)
              A / hold ASK    ask "what did you see today?" by voice (answers out loud on macOS)
-             R / REBOOT      close the shard, reload from disk, re-ask
              F / FORGET      delete what it knows about the recognized object
              Q / IGNORE      dismiss the current unknown (clutter you won't teach)
+             R               close the shard, reload from disk, re-ask (keyboard
+                             only: an offline robot makes the point by itself)
 Quit with Ctrl-C in the terminal (no on-screen quit — a stray tap would end
 the demo). On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
 --host non-loopback serves HTTPS so the browser will grant mic access.
@@ -21,6 +24,7 @@ or screen at all: see deploy/ and the README section "Headless Appliance".
 """
 import argparse
 import ipaddress
+import json
 import os
 import queue
 import shutil
@@ -33,9 +37,9 @@ import threading
 import time
 import traceback
 import webbrowser
-from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 import cv2
 import numpy as np
@@ -45,55 +49,129 @@ from robot.core import Robot
 from robot.memory import RECOGNIZE_THRESHOLD
 
 # High contrast, styled for the domain, readable from across a room (BGR).
+# Only the boxes drawn onto the feed use these now; the panel is CSS, and the
+# same palette is repeated at the top of PAGE as custom properties.
 BG = (246, 244, 240)
 INK = (45, 38, 32)
 RED = (76, 36, 220)      # Qdrant red
 TEAL = (136, 150, 0)
-ORANGE = (0, 152, 255)
 VIOLET = (255, 71, 96)
-PANEL_W = 480
 FONT = cv2.FONT_HERSHEY_DUPLEX
 PORT = 8765
 UTTERANCE_WAV = "/tmp/l6-utterance.wav"  # one buffer; the busy gate serializes writes
-# The composed 1760x720 view costs ~183 KB at 85, ~134 KB at 70, so at the
-# camera's 10 fps this is the difference between 15 and 11 Mbps on the wire.
-# Turn it down only if the feed lags on a congested 2.4 GHz channel: the 5 GHz
-# hotspot carries either with room to spare. See "Streaming over the hotspot".
+# JPEG quality for the streamed feed. Turn it down only if the feed lags on a
+# congested channel, and measure first — see "Streaming over the hotspot".
 STREAM_QUALITY = 85
+CROP_PX = 180   # the "sees now" thumbnail served at /crop.jpg
 
+# ASCII only in here, comments included: a bytes literal cannot hold anything
+# else. Use HTML entities in the markup and \\uXXXX escapes in the JS.
 PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
-  html,body { margin:0; height:100%; overflow:hidden; background:#0b0b0b;
-              font-family:system-ui,sans-serif; touch-action:manipulation }
-  #app  { width:100vw; height:100vh; display:flex; flex-direction:column }
-  #view { flex:1; min-height:0; width:100%; object-fit:contain; display:block }
-  #bar  { display:flex; gap:8px; padding:10px; flex:0 0 auto; background:#e8e5df }
-  button { flex:1; min-height:64px; border:0; border-radius:12px; font-size:22px;
-           font-weight:700; color:#fff; -webkit-user-select:none; user-select:none;
-           touch-action:none }
-  #teach  { background:#009688 }
-  #ask    { background:#6047ff }
-  #reboot { background:#20262d }
-  #forget { background:#c0392b }
-  #ignore { background:#6b7280 }
+  /* Same palette as the boxes drawn on the feed (see the BGR constants). */
+  :root { --bg:#0b0b0b; --panel:#f0f4f6; --ink:#20262d; --teal:#009688;
+          --violet:#6047ff; --red:#dc244c; --dim:#6b7280; --line:#d9e0e4 }
+  * { box-sizing:border-box }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+              font-family:system-ui,-apple-system,sans-serif;
+              touch-action:manipulation }
+  #app  { height:100%; display:flex; flex-direction:column }
+  /* The cap is load-bearing, not taste. The feed is the only element with an
+     intrinsic size, and #side is flex:1 (basis 0), so it contributes nothing
+     to the used height and cannot push the feed back: a full-width 16:9 image
+     eats a landscape phone's entire viewport on its own and the panel computes
+     to zero. Reset it in the row layout below, where height is not contended. */
+  #view { width:100%; background:#000; object-fit:contain;
+          flex:0 1 auto; min-height:0; max-height:50vh }
+  #side { flex:1; min-height:0; display:flex; flex-direction:column;
+          background:var(--panel) }
+  #panel { flex:1; min-height:0; overflow-y:auto; padding:14px 16px }
+  /* Side by side wherever there is width for it, which includes a phone in
+     landscape (667 CSS px and up), not just a laptop. Portrait keeps the
+     column and stays readable, which is why there is no "rotate your phone"
+     nag any more. */
+  @media (min-width:640px) and (orientation:landscape) {
+    #app  { flex-direction:row }
+    #view { flex:1; min-width:0; height:100%; max-height:none }
+    #side { flex:0 0 min(400px, 45%) }
+  }
+  #head { display:flex; justify-content:space-between; align-items:baseline;
+          border-bottom:2px solid var(--line); padding-bottom:8px }
+  h1 { font-size:15px; letter-spacing:.14em; margin:0; color:var(--violet) }
+  #count { font-size:14px; color:var(--dim) }
+  #where { font-size:13px; color:var(--dim); margin-top:6px }
+  #label { display:inline-block; margin:14px 0 12px; padding:6px 14px;
+           border-radius:10px; color:#fff; background:var(--dim);
+           font-size:clamp(20px,4.5vw,30px); font-weight:700; line-height:1.15;
+           word-break:break-word }
+  #match { display:flex; align-items:center; gap:12px }
+  figure { margin:0; text-align:center; flex:0 0 auto }
+  figure img { width:76px; height:76px; object-fit:cover; border-radius:8px;
+               background:var(--line); display:block; opacity:0;
+               transition:opacity .2s }
+  figcaption { font-size:11px; color:var(--violet); margin-top:5px }
+  #gauge { flex:1; min-width:0 }
+  #track { position:relative; height:22px; border-radius:5px;
+           background:var(--line); overflow:hidden }
+  #fill { height:100%; width:0; background:var(--red); transition:width .2s }
+  #mark { position:absolute; top:0; bottom:0; width:3px; background:var(--ink) }
+  #nums { display:flex; justify-content:space-between; margin-top:5px;
+          font-size:12px; color:var(--dim) }
+  #score { font-weight:700; color:var(--ink); font-size:15px }
+  #note { font-size:14px; color:var(--dim); font-style:italic; margin-top:12px }
+  .card { border:2px solid var(--dim); border-radius:10px; padding:10px 12px;
+          margin-top:16px }
+  .card h2 { font-size:13px; letter-spacing:.1em; margin:0 0 8px }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px;
+         font-size:14px }
+  .row img { width:46px; height:46px; object-fit:cover; border-radius:6px;
+             background:var(--line) }
+  .meta { font-size:12px; color:var(--violet) }
+  #log { margin-top:18px; font-size:12px; color:var(--dim); line-height:1.7 }
+  #status { flex:0 0 auto; display:none; padding:9px 16px; background:var(--ink);
+            color:#fff; font-size:14px }
+  #bar { flex:0 0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px;
+         padding:10px; background:#e2e8ea;
+         padding-bottom:calc(10px + env(safe-area-inset-bottom)) }
+  button { border:0; border-radius:12px; color:#fff; font-weight:700;
+           -webkit-user-select:none; user-select:none; touch-action:none }
+  #teach,#ask { min-height:66px; font-size:clamp(17px,4vw,21px) }
+  #teach { background:var(--teal) }
+  #ask { background:var(--violet) }
+  #forget,#ignore { min-height:44px; font-size:14px; background:var(--dim) }
+  #forget { background:var(--red) }
+  #teach.off { opacity:.4 }
   button.rec { box-shadow:0 0 0 4px #fff inset; filter:brightness(1.25) }
-  #hint { display:none; position:fixed; top:8px; left:50%;
-          transform:translateX(-50%); background:#20262d; color:#fff;
-          padding:8px 14px; border-radius:20px; font-size:14px; z-index:9 }
-  @media (orientation:portrait) { #hint { display:block } }
 </style>
 <div id="app">
   <img id="view" src="/stream">
-  <div id="bar">
-    <button id="teach">HOLD&nbsp;&middot;&nbsp;TEACH</button>
-    <button id="ask">HOLD&nbsp;&middot;&nbsp;ASK</button>
-    <button id="reboot">REBOOT</button>
-    <button id="forget">FORGET</button>
-    <button id="ignore">IGNORE</button>
+  <div id="side">
+    <div id="panel">
+      <div id="head"><h1>ROBOT MEMORY</h1><span id="count"></span></div>
+      <div id="where"></div>
+      <div id="label">looking&hellip;</div>
+      <div id="match">
+        <figure><img id="thumbA"><figcaption>remembers</figcaption></figure>
+        <div id="gauge">
+          <div id="track"><div id="fill"></div><div id="mark"></div></div>
+          <div id="nums"><span id="score"></span><span id="thr"></span></div>
+        </div>
+        <figure><img id="thumbB"><figcaption>sees now</figcaption></figure>
+      </div>
+      <div id="note"></div>
+      <div id="card"></div>
+      <div id="log"></div>
+    </div>
+    <div id="status"></div>
+    <div id="bar">
+      <button id="teach">HOLD&nbsp;&middot;&nbsp;TEACH</button>
+      <button id="ask">HOLD&nbsp;&middot;&nbsp;ASK</button>
+      <button id="forget">FORGET</button>
+      <button id="ignore">IGNORE</button>
+    </div>
   </div>
 </div>
-<div id="hint">&#8635; rotate to landscape</div>
 <script>
   const $ = id => document.getElementById(id);
   const img = $('view');
@@ -104,14 +182,139 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   wake();
   addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
 
-  // Laptop keyboard drives the sounddevice mic on the machine itself.
+  // Laptop keyboard drives the sounddevice mic on the machine itself. R (close
+  // the shard and reload it from disk) is keyboard-only on purpose: it is a
+  // presenter's beat, not a control anyone should meet on a phone.
   addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if ('tarfq'.includes(k)) fetch('/key?k=' + k);
   });
-  $('reboot').onclick = () => fetch('/key?k=r');
   $('forget').onclick = () => fetch('/key?k=f');
   $('ignore').onclick = () => fetch('/key?k=q');
+
+  // ---- the panel: /state, four times a second -----------------------------
+  // Everything below used to be drawn into the video with cv2.putText, at a
+  // fixed 480 px, which on a phone in portrait rendered about 100 px wide.
+  // Text nodes cost nothing on the wire and lay out for the screen they land
+  // on. Never build these with innerHTML: labels and notes are whatever
+  // Whisper heard.
+  const el = (tag, text, cls) => {
+    const n = document.createElement(tag);
+    if (text != null) n.textContent = text;
+    if (cls) n.className = cls;
+    return n;
+  };
+  // The gauge starts at 0.5, not 0: unrelated crops from one camera share
+  // lighting and scale and rarely score below it, so the interesting range is
+  // the top half. See "Calibrating For Your Camera" in the README.
+  const pct = v => Math.max(0, Math.min(1, (v - 0.5) / 0.5)) * 100;
+  // Fade a thumbnail out rather than clearing src, and only re-fetch when the
+  // url actually changes: thumb filenames are stamped, so a re-set would be a
+  // request per poll for a picture the browser already has.
+  const setImg = (n, url) => {
+    n.style.opacity = url ? 1 : 0;
+    if (url && n.dataset.url !== url) { n.dataset.url = url; n.src = url; }
+  };
+
+  let shownSeq = null, statusAt = 0, shownCard = '';
+  function render(s) {
+    $('count').textContent = s.count + ' memories';
+    $('where').textContent = s.where ? 'here: ' + s.where : '';
+    const f = s.focus;
+    const known = f && f.label;
+    $('label').textContent = f ? (f.label || 'UNKNOWN \\u2014 hold TEACH')
+                               : 'looking\\u2026';
+    $('label').style.background =
+      f ? (known ? 'var(--teal)' : 'var(--red)') : 'var(--dim)';
+    $('fill').style.width = (f ? pct(f.score) : 0) + '%';
+    $('fill').style.background =
+      f && f.score >= s.threshold ? 'var(--teal)' : 'var(--red)';
+    $('mark').style.left = pct(s.threshold) + '%';
+    $('score').textContent = f && f.score ? f.score.toFixed(3) : '';
+    $('thr').textContent = 'bar ' + s.threshold.toFixed(2);
+    setImg($('thumbA'), f && f.thumb ? '/thumb?f=' + f.thumb : null);
+    $('note').textContent = f && f.note ? '\\u201c' + f.note + '\\u201d' : '';
+    // Say whether TEACH will do anything before the finger goes down, rather
+    // than answering "nothing new to teach" after it.
+    $('teach').classList.toggle('off', !s.teachable);
+
+    const key = JSON.stringify(s.card);
+    if (key !== shownCard) { shownCard = key; drawCard(s.card); }
+
+    const log = $('log');
+    log.replaceChildren();
+    if (s.events.length) log.append(el('div', 'memory writes'));
+    for (const e of s.events) log.append(el('div', e));
+
+    // One status line for every message the robot has: the busy phase, and
+    // the refusals ("nothing new to teach") that used to be painted into the
+    // video where nobody looks. Fades once it has been read.
+    const msg = s.status || (s.busy ? 'working\\u2026' : '');
+    // On the counter, not the text: the same message sent twice is two
+    // messages. statusAt stays 0 on the first paint so a reload does not
+    // replay whatever the robot last said.
+    if (s.status_seq !== shownSeq) {
+      statusAt = shownSeq === null ? 0 : Date.now();
+      shownSeq = s.status_seq;
+    }
+    const show = msg && (s.busy || Date.now() - statusAt < 6000);
+    $('status').style.display = show ? 'block' : 'none';
+    $('status').textContent = msg;
+  }
+
+  function drawCard(c) {
+    const box = $('card');
+    box.replaceChildren();
+    if (!c) return;
+    const card = el('div', null, 'card');
+    if (c.kind === 'taught') {
+      card.style.borderColor = 'var(--teal)';
+      const h = el('h2', 'MEMORY WRITTEN'); h.style.color = 'var(--teal)';
+      card.append(h, el('div', 'vectors: image + text'));
+      if (c.where) card.append(el('div', 'here: ' + c.where, 'meta'));
+      card.append(el('div', '\\u201c' + c.transcript + '\\u201d'));
+    } else if (c.kind === 'forgot') {
+      card.style.borderColor = 'var(--red)';
+      const h = el('h2', 'MEMORY DELETED'); h.style.color = 'var(--red)';
+      card.append(h, el('div', '"' + c.label + '" \\u00b7 ' + c.n + ' point(s) removed'));
+    } else {
+      card.style.borderColor = 'var(--violet)';
+      const h = el('h2', 'RECALL'); h.style.color = 'var(--violet)';
+      card.append(h, el('div', 'Q: \\u201c' + c.q + '\\u201d'));
+      card.append(el('div', c.say, 'meta'));
+      for (const [title, hits] of [['SEEN', c.seen], ['HEARD', c.heard]]) {
+        if (!hits.length) continue;
+        const t = el('h2', title); t.style.margin = '12px 0 0';
+        card.append(t);
+        for (const hit of hits) {
+          const row = el('div', null, 'row');
+          if (hit.thumb) {
+            const im = el('img'); im.src = '/thumb?f=' + hit.thumb;
+            im.style.opacity = 1; row.append(im);
+          }
+          const col = el('div');
+          col.append(el('div', hit.when + ' \\u00b7 ' + (hit.what || hit.label || 'unknown')));
+          const tail = (hit.where ? hit.where + ' \\u00b7 ' : '') + 'score ' + hit.score;
+          col.append(el('div', tail, 'meta'));
+          row.append(col);
+          card.append(row);
+        }
+      }
+    }
+    box.append(card);
+  }
+
+  (async function poll() {
+    for (;;) {
+      try { render(await (await fetch('/state')).json()); } catch (e) {}
+      await new Promise(r => setTimeout(r, 250));
+    }
+  })();
+  // The live crop is the only part that needs its own request. Once a second
+  // is plenty for a side-by-side comparison; the video is the live view.
+  setInterval(() => { $('thumbB').src = '/crop.jpg?' + Date.now(); }, 1000);
+  $('thumbB').onload  = () => { $('thumbB').style.opacity = 1; };
+  $('thumbB').onerror = () => { $('thumbB').style.opacity = 0; };
 
   // Hold TEACH / ASK to record from THIS device's mic and upload one WAV.
   const WORKLET = URL.createObjectURL(new Blob([
@@ -272,17 +475,6 @@ def _ensure_cert(ip):
     return str(cert), str(key)
 
 
-@lru_cache(maxsize=32)
-def _thumb_img(path):
-    """Thumbnails, read once. The panel is redrawn for every streamed frame,
-    and decoding the same JPEGs off disk ten times a second is visible jank on
-    the Jetson. Thumbs are write-once (`Robot._thumb` stamps the filename with
-    time_ns and `forget` deletes points, not files), so this cannot go stale.
-    32 crops at demo resolution is a few MB — keep it bounded, memory on this
-    board is the scarce thing."""
-    return cv2.imread(path)
-
-
 def _text(img, s, xy, scale=0.8, color=INK, thick=1):
     cv2.putText(img, s, xy, FONT, scale, color, thick, cv2.LINE_AA)
 
@@ -308,165 +500,51 @@ def draw_feed(frame, tracks, focused):
     return frame
 
 
-def draw_gauge(panel, y, score, threshold, x0=30, x1=PANEL_W - 30):
-    """The evidence: live score against the threshold line."""
-    lo, hi = 0.5, 1.0
-    px = lambda v: int(x0 + (max(lo, min(hi, v)) - lo) / (hi - lo) * (x1 - x0))
-    cv2.rectangle(panel, (x0, y), (x1, y + 26), (225, 222, 215), -1)
-    if score > lo:
-        color = TEAL if score >= threshold else RED
-        cv2.rectangle(panel, (x0, y), (px(score), y + 26), color, -1)
-    tx = px(threshold)
-    cv2.line(panel, (tx, y - 8), (tx, y + 34), INK, 3)
-    _text(panel, f"{threshold:.2f}", (tx - 32, y - 14), 0.7, INK, 2)
-    if score > lo:
-        s = f"{score:.3f}"
-        (w, _), _ = cv2.getTextSize(s, FONT, 0.8, 2)
-        _text(panel, s, ((x0 + x1 - w) // 2, y + 58), 0.8, INK, 2)
+def _answer_line(q, res):
+    """The spoken sentence — every value in it is a live payload field.
 
-
-def draw_match(panel, y, focused, threshold):
-    """The match, visible: the remembered view next to the live view, with
-    the score gauge between them — vector similarity an audience can see."""
-    left = (_thumb_img(focused.thumb)
-            if focused is not None and focused.thumb else None)
-    right = focused.crop if focused is not None else None
-    for cap, img, x in (("remembers", left, 30),
-                        ("sees now", right, PANEL_W - 102)):
-        cv2.rectangle(panel, (x, y), (x + 72, y + 72), (225, 222, 215), -1)
-        if img is not None and img.size:
-            panel[y:y + 72, x:x + 72] = cv2.resize(img, (72, 72))
-        (w, _), _ = cv2.getTextSize(cap, FONT, 0.5, 1)
-        _text(panel, cap, (x + 36 - w // 2, y + 90), 0.5, VIOLET, 1)
-    draw_gauge(panel, y + 20, focused.score if focused else 0.0, threshold,
-               x0=118, x1=PANEL_W - 118)
-
-
-def draw_panel(h, events, count, focused, banner, card,
-               threshold=RECOGNIZE_THRESHOLD, where=None):
-    panel = np.full((h, PANEL_W, 3), BG, dtype=np.uint8)
-    cv2.rectangle(panel, (0, 0), (PANEL_W, 54), VIOLET, -1)
-    if where:
-        _text(panel, "ROBOT MEMORY", (20, 25), 0.8, (255, 255, 255), 2)
-        _text(panel, f"here: {where}", (20, 46), 0.55, (255, 255, 255), 1)
-    else:
-        _text(panel, "ROBOT MEMORY", (20, 37), 1.0, (255, 255, 255), 2)
-    _text(panel, f"{count} memories", (PANEL_W - 190, 37),
-          0.7, (255, 255, 255), 1)
-    y = 104
-    if focused is None or not focused.last_query:
-        _text(panel, "looking...", (30, y), 0.9)
-    elif focused.label:
-        _chip(panel, focused.label, (30, y), TEAL, 1.0)
-    else:
-        _chip(panel, "UNKNOWN · press T to teach", (30, y), RED, 0.85)
-    draw_match(panel, 128, focused, threshold)
-    if focused is not None and focused.note:
-        for i, line in enumerate(_wrap(f'"{focused.note}"', 44)[:2]):
-            _text(panel, line, (30, 248 + 24 * i), 0.6)
-    y = 310
-    if banner:
-        cv2.rectangle(panel, (0, y - 30), (PANEL_W, y + 12), ORANGE, -1)
-        _text(panel, banner, (20, y), 0.85, (255, 255, 255), 2)
-    y = 350
-    if card and card[0] == "taught":
-        # the shot-2 evidence: one point, both named vectors, the words kept
-        taught = card[1]
-        cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 116), TEAL, 3)
-        _text(panel, "MEMORY WRITTEN", (26, y), 0.75, TEAL, 2)
-        _text(panel, "vectors: image + text", (26, y + 30), 0.7, INK, 2)
-        ty = y + 58
-        if where:
-            _text(panel, f"here: {where}", (26, y + 54), 0.6, VIOLET, 1)
-            ty = y + 80
-        for i, line in enumerate(_wrap(f'"{taught["transcript"]}"', 40)[:2]):
-            _text(panel, line, (26, ty + 24 * i), 0.58)
-    elif card and card[0] == "forgot":
-        # the correction beat: teach wrong -> forget -> watch it go UNKNOWN
-        label, n = card[1]
-        cv2.rectangle(panel, (14, y - 24), (PANEL_W - 14, y + 66), RED, 3)
-        _text(panel, "MEMORY DELETED", (26, y), 0.75, RED, 2)
-        _text(panel, f'"{label[:22]}" · {n} point(s) removed', (26, y + 30),
-              0.62, INK, 2)
-    elif card and card[0] == "answer":
-        q, res = card[1]
-        for line in _wrap(f'Q: "{q}"', 40)[:2]:
-            _text(panel, line, (20, y), 0.65, VIOLET, 1); y += 24
-        _text(panel, "SEEN", (20, y + 6), 0.7, INK, 2); y += 20
-        for hit in res["seen"][:2]:
-            p = hit.payload
-            thumb = _thumb_img(p["thumb"]) if p.get("thumb") else None
-            x = 30
-            if thumb is not None and y + 56 < h - 40:
-                panel[y:y + 56, 24:80] = cv2.resize(thumb, (56, 56))
-                x = 92
-            when = time.strftime("%H:%M", time.localtime(p["ts"]))
-            _text(panel, f"{when}  {p.get('label') or 'unknown'}",
-                  (x, y + 22), 0.58)
-            tail = f"{p['where']} · " if p.get("where") else ""
-            _text(panel, f"{tail}score {hit.score:.2f}", (x, y + 46), 0.5,
-                  VIOLET, 1)
-            y += 62
-        y += 12
-        _text(panel, "HEARD", (20, y + 6), 0.7, INK, 2); y += 30
-        for hit in res["heard"][:2]:
-            if y > h - 130:  # stop before the memory-writes log
-                break
-            p = hit.payload
-            what = p.get("transcript") or p.get("label") or "?"
-            when = time.strftime("%H:%M", time.localtime(p["ts"]))
-            line = _wrap(f"{when}  {what}", 42)[0]
-            _text(panel, f"{line}  ({hit.score:.2f})", (30, y), 0.58)
-            y += 22
-            if p.get("where"):
-                _text(panel, f"   {p['where']}", (30, y), 0.5, VIOLET, 1)
-                y += 20
-    log = events[-3:]
-    ly = h - 44 - 22 * len(log)
-    if log:
-        _text(panel, "memory writes", (20, ly), 0.55, VIOLET, 1)
-    for i, e in enumerate(log):
-        _text(panel, e[:44], (20, ly + 22 * (i + 1)), 0.55)
-    cv2.rectangle(panel, (0, h - 34), (PANEL_W, h), INK, -1)
-    _text(panel, "T teach  A ask  R reboot  F forget  Q ignore", (20, h - 11),
-          0.65, (255, 255, 255), 1)
-    return panel
-
-
-def _speak(q, res):
-    """Say the answer out loud — every spoken value is a live payload field.
-    macOS `say`; the Jetson port swaps in espeak."""
+    Built separately from `_speak` because the panel shows it too: the Jetson
+    has no audio hardware, so on the appliance this line is the whole answer.
+    """
     seen = res["seen"]
     if not seen:
-        line = "I didn't see anything like that today."
-    elif "what did you see" in q.lower():
+        return "I didn't see anything like that today."
+    if "what did you see" in q.lower():
         # the day-inventory question lists the objects; anything else answers
         # with the top hit. ponytail: one phrase check, not intent parsing —
         # the demo script asks this exact question
         labels = [h.payload.get("label") or "something" for h in seen[:3]]
         names = (", ".join(labels[:-1]) + f" and {labels[-1]}"
                  if len(labels) > 1 else labels[0])
-        line = f"Today I saw {names}."
-    else:
-        p = seen[0].payload
-        when = time.strftime("%-I:%M %p", time.localtime(p["ts"]))
-        line = f"I saw {p.get('label') or 'something'} at {when}"
-        if p.get("where"):
-            line += f", in {p['where']}"
-        line += "."
+        return f"Today I saw {names}."
+    p = seen[0].payload
+    when = time.strftime("%-I:%M %p", time.localtime(p["ts"]))
+    line = f"I saw {p.get('label') or 'something'} at {when}"
+    if p.get("where"):
+        line += f", in {p['where']}"
+    return line + "."
+
+
+def _hit_json(hit):
+    """One recall result, flattened for the panel."""
+    p = hit.payload
+    return {
+        "when": time.strftime("%H:%M", time.localtime(p["ts"])),
+        "label": p.get("label"),
+        "what": p.get("transcript"),
+        "where": p.get("where"),
+        "score": round(hit.score, 2),
+        "thumb": Path(p["thumb"]).name if p.get("thumb") else None,
+    }
+
+
+def _speak(q, res):
+    """Say the answer out loud on a machine that can. macOS `say`; the Jetson
+    has no speaker, and the sentence is on the panel either way."""
+    line = _answer_line(q, res)
     if shutil.which("say"):
         subprocess.Popen(["say", line])
     return line
-
-
-def _wrap(s, width):
-    words, lines, cur = s.split(), [], ""
-    for w in words:
-        if len(cur) + len(w) + 1 > width and cur:
-            lines.append(cur); cur = w
-        else:
-            cur = f"{cur} {w}".strip()
-    return lines + [cur] if cur else lines or [""]
 
 
 class StreamHandler(BaseHTTPRequestHandler):
@@ -494,6 +572,44 @@ class StreamHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
                 self.wfile.write(PAGE)
+            elif self.path == "/state":
+                # Everything the panel shows, four times a second. Small enough
+                # that it is noise beside the video, and it means the panel is
+                # laid out by the browser instead of being drawn at a fixed
+                # pixel width into a frame the phone then shrinks.
+                body = json.dumps(self.app.state()).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path.startswith("/thumb?f="):
+                # A taught or remembered view, by filename. `.name` drops any
+                # directory part, so nothing outside the thumbs directory is
+                # reachable however the query is written.
+                name = Path(unquote(self.path.split("=", 1)[1])).name
+                path = self.app.robot.thumbs / name
+                if path.is_file():
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    # thumb filenames are stamped with time_ns and never
+                    # rewritten, so the browser can keep them
+                    self.send_header("Cache-Control", "max-age=3600")
+                    self.end_headers()
+                    self.wfile.write(path.read_bytes())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+            elif self.path.startswith("/crop.jpg"):
+                jpeg = self.app.crop_jpeg()
+                self.send_response(200 if jpeg else 404)
+                if jpeg:
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpeg)))
+                self.end_headers()
+                if jpeg:
+                    self.wfile.write(jpeg)
             elif self.path.startswith("/stream"):
                 self.send_response(200)
                 self.send_header(
@@ -560,7 +676,8 @@ class LiveApp:
         self.lock = threading.Lock()   # robot is shared: detect thread + keys
         self.latest = None
         self.tracks = []
-        self.banner = None
+        self._banner = None   # the status line; assign via `banner` below
+        self._banner_seq = 0
         self.card = None   # ("taught", {...}) or ("answer", (q, results))
         self.mem_count = 0
         self.shot = None   # (seq, jpeg): latest composed view for the stream
@@ -573,6 +690,20 @@ class LiveApp:
         self.pending_track = None  # ...and the track it came from
         self.stop = threading.Event()
         self.frame_at = None       # monotonic stamp of the last frame (_watchdog)
+
+    # Every message the panel shows is assigned to `self.banner` from a dozen
+    # places. It is a property only so each assignment can bump a counter: the
+    # page hides a status line a few seconds after it arrives, and without one
+    # it cannot tell a stale message from the same message sent again. Press
+    # IGNORE twice a minute apart and the second press would be silent.
+    @property
+    def banner(self):
+        return self._banner
+
+    @banner.setter
+    def banner(self, msg):
+        self._banner = msg
+        self._banner_seq += 1
 
     def _detect_loop(self):
         last = 0.0
@@ -587,14 +718,81 @@ class LiveApp:
                 self.mem_count = self.robot.memory.count()
 
     def _render(self, frame, tracks, focused):
+        """The stream carries the annotated camera view and nothing else.
+
+        The panel used to be drawn here and hstacked on, which pinned it to
+        480 px however small the screen was. It is HTML now (see PAGE and
+        `state`).
+
+        The bandwidth saving is real but small, and it is not the reason: A/B
+        on one scene, 49 frames in 5 s either way, 241 KB per composed frame
+        against 210 KB per feed frame — about 13%. A flat panel of text is
+        cheap to encode; the camera view was always the expensive part.
+        """
         view = draw_feed(frame.copy(), tracks, focused)
-        panel = draw_panel(view.shape[0], self.robot.events, self.mem_count,
-                           focused, self.banner, self.card,
-                           self.robot.memory.threshold, self.robot.memory.where)
-        ok, buf = cv2.imencode(".jpg", np.hstack([view, panel]),
+        ok, buf = cv2.imencode(".jpg", view,
                                [cv2.IMWRITE_JPEG_QUALITY, STREAM_QUALITY])
         if ok:
             self._publish(buf)
+
+    def state(self):
+        """What the panel draws, as JSON. Read once from the shared attributes
+        so a detect pass landing mid-build cannot split one view across two."""
+        r = self.robot
+        focus, teachable = r.attention, r.teachable
+        seen = focus is not None and focus.last_query
+        return {
+            "count": self.mem_count,
+            "where": r.memory.where,
+            "threshold": r.memory.threshold,
+            "busy": self.busy,
+            "status": self.banner,
+            "status_seq": self._banner_seq,
+            # whether TEACH will do anything, so the button can say so before
+            # the finger goes down instead of refusing afterwards
+            "teachable": teachable is not None and teachable.crop is not None,
+            "focus": {
+                "label": focus.label,
+                "score": round(focus.score, 3),
+                "note": focus.note,
+                "thumb": Path(focus.thumb).name if focus.thumb else None,
+            } if seen else None,
+            "card": self._card_json(),
+            "events": r.events[-3:],
+        }
+
+    def _card_json(self):
+        """The last action's result: taught, forgot, or an answer."""
+        card = self.card
+        if not card:
+            return None
+        kind, data = card
+        if kind == "taught":
+            return {"kind": "taught", "label": data["label"],
+                    "transcript": data["transcript"],
+                    "where": self.robot.memory.where}
+        if kind == "forgot":
+            label, n = data
+            return {"kind": "forgot", "label": label, "n": n}
+        q, res = data
+        return {"kind": "answer", "q": q, "say": _answer_line(q, res),
+                "seen": [_hit_json(h) for h in res["seen"][:3]],
+                "heard": [_hit_json(h) for h in res["heard"][:3]]}
+
+    def crop_jpeg(self):
+        """The live crop of whatever holds focus — the "sees now" half of the
+        match. None when nothing is in focus, which the page reads as 404."""
+        focus = self.robot.attention
+        crop = focus.crop if focus is not None else None
+        if crop is None or not crop.size:
+            return None
+        h, w = crop.shape[:2]
+        scale = CROP_PX / max(h, w)
+        if scale < 1:
+            crop = cv2.resize(crop, (max(1, int(w * scale)),
+                                     max(1, int(h * scale))))
+        ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes() if ok else None
 
     def _publish(self, buf):
         """Hand a composed JPEG to the stream handler, stamped with a sequence
@@ -741,10 +939,10 @@ class LiveApp:
 
         def splash(msg):
             print(msg)
-            img = np.full((720, 1280 + PANEL_W, 3), BG, np.uint8)
-            _text(img, msg, (400, 350), 1.1, INK, 2)
+            img = np.full((720, 1280, 3), BG, np.uint8)
+            _text(img, msg, (380, 350), 1.1, INK, 2)
             _text(img, "first run downloads the models (~1.5 GB)",
-                  (400, 400), 0.7, VIOLET, 1)
+                  (380, 400), 0.7, VIOLET, 1)
             ok, buf = cv2.imencode(".jpg", img)
             if ok:
                 self._publish(buf)

@@ -85,12 +85,20 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
 |---|---|
 | `T` / hold **TEACH** | Teach the focused unknown object by voice |
 | `A` / hold **ASK** | Ask a voice question, such as "what did you see today?" |
-| `R` / **REBOOT** | Close the shard, reload from disk, then re-ask |
 | `F` / **FORGET** | Delete what it knows about the focused recognized object |
 | `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
+| `R` | Close the shard, reload from disk, then re-ask — keyboard only |
 | Ctrl-C | Quit (no on-screen quit, so a stray tap won't end the demo) |
 
 Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
+
+`R` has no button. It is a presenter's beat rather than a control — and a robot serving its own Wi-Fi with the internet unplugged already makes the point that the memories are local. Wiping them is `--reset`, which is deliberately off the UI so a stray tap cannot erase a demo.
+
+### The Page
+
+The browser gets the annotated camera feed as MJPEG and polls `/state` for everything else, so the memory panel is HTML: it lays out for the screen it lands on, in portrait as well as landscape, and reads at arm's length on a phone. It was previously drawn into the video at a fixed 480 px, which on a phone held upright rendered about 100 px wide — hence the "rotate to landscape" nag that is now gone.
+
+The panel shows what the robot is attending to: the label or `UNKNOWN`, the live similarity score against the threshold, the remembered view beside the live one, and the result of the last action. Refusals such as *nothing new to teach* appear as a status line under the panel rather than being painted into the video. `TEACH` dims when there is nothing new in view, so you can see whether it will do anything before you press it.
 
 ### Aiming It
 
@@ -286,13 +294,15 @@ Two behaviours worth knowing before you debug them:
 
 ### The Feed Is The Bottleneck
 
-The live view is MJPEG, and the composed 1760x720 frame is about 183 KB. At the camera's 10 fps that is **~13 Mbps** of video the robot has to push over its own hotspot — far more than anything else the demo does.
+The live view is MJPEG, and at the camera's 10 fps it is **well over 10 Mbps** of video the robot has to push over its own hotspot — far more than anything else the demo does. How far over depends on the scene, not on the code: a 1280x720 frame measured 210 KB pointed at a cluttered desk here (17 Mbps), against 183 KB recorded earlier on a tidier one. Measure yours rather than trusting either number.
+
+Moving the panel out of the video took roughly 13% off that — A/B on one scene, 241 KB per composed frame against 210 KB per feed frame. Worth having, but the camera view, not the panel, was always the expensive part.
 
 That number is why the hotspot is on 5 GHz. A 2.4 GHz access point at 20 MHz carries 15–25 Mbps in an empty room and much less in a hall full of phones, so the radio becomes the narrowest part of the chain. When that happens the failure is not a dropped frame: TCP queues what it cannot send, so the feed arrives smooth but **seconds behind the room**, and the delay grows the longer you watch. Pressing TEACH on an object you can no longer see is the symptom that ruins a demo.
 
 The trade is range. 5 GHz carries less far and through less material, so keep the phone in the same room as the robot rather than across a hall.
 
-If the feed still lags — an unavoidably crowded band, or a client stuck on 2.4 GHz — the one number to turn is `STREAM_QUALITY` in `robot/app.py`. Dropping it from 85 to 70 takes the frame to ~134 KB and the stream to ~11 Mbps, for a slightly softer image. Check what you are actually up against first:
+If the feed still lags — an unavoidably crowded band, or a client stuck on 2.4 GHz — the one number to turn is `STREAM_QUALITY` in `robot/app.py`. Dropping it from 85 to 70 costs about a quarter of the bytes, for a slightly softer image. Measure before and after rather than trusting a figure from another scene: JPEG size depends far more on what the camera is pointed at than on anything in the code. Check what you are actually up against first:
 
 ```bash
 iw dev wlP1p1s0 info                      # which band and channel the AP is really on
@@ -327,7 +337,7 @@ High-level design:
 - UVC USB camera as the front "eye"
 - APA102/DotStar LEDs driven from the Jetson SPI header
 - No built-in mic, speaker, or screen; your phone browser is the interface
-- Spoken answers use macOS `say`; on Jetson, swap in `espeak` plus a small USB speaker (without one, the answer stays on-screen only)
+- Spoken answers use macOS `say`; the Jetson has no audio hardware, so the answer is shown on the panel instead — the same sentence it would have spoken. Add `espeak` and a small USB speaker if you want it out loud
 
 The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](BOM.md).
 
