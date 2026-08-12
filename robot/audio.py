@@ -33,11 +33,12 @@ def record_wav(path, max_seconds=8.0):
         sd.default.device = (MIC_DEVICE, None)
     rate = int(sd.query_devices(kind="input")["default_samplerate"])
     block = int(rate * 0.1)
-    chunks, spoke, quiet = [], False, 0.0
+    chunks, spoke, quiet, lost = [], False, 0.0, False
     with sd.InputStream(samplerate=rate, channels=1, dtype="int16",
                         blocksize=block) as stream:
         for _ in range(int(max_seconds / 0.1)):
-            data, _ = stream.read(block)
+            data, overflowed = stream.read(block)
+            lost = lost or overflowed
             chunks.append(data[:, 0].copy())
             rms = np.sqrt(np.mean(data.astype(np.float64) ** 2))
             if rms >= SPEECH_RMS:
@@ -46,6 +47,10 @@ def record_wav(path, max_seconds=8.0):
                 quiet += 0.1
                 if quiet >= TRAIL_QUIET:
                     break
+    if lost:
+        # a garbled transcript after this line is dropped audio, not Whisper —
+        # something starved this loop of the GIL while the stream was open
+        print("mic buffer overflowed; some audio was dropped")
     samples = np.concatenate(chunks)
     if rate != 16000:
         n = int(len(samples) * 16000 / rate)
@@ -142,7 +147,13 @@ _CLAUSE_WORDS = {"i", "it", "and", "that", "which", "because", "she", "he",
 
 
 def parse_label(transcript):
-    """'This is my mug — Maria made it.' → 'my mug'. Free-form fallback."""
+    """'This is my mug — Maria made it.' → 'my mug'. Free-form fallback.
+
+    Lowercased: labels are compared as exact strings (forget deletes by label,
+    recall dedupes by label) and Whisper capitalizes on a whim — the same
+    bottle taught twice came back "Water bottle" and "water bottle", two
+    objects as far as FORGET is concerned. One casing, chosen here, at the
+    single point every label passes through."""
     m = re.search(r"this is (?:an? )?(.+?)(?:\s*[,.;!?—–-]|$)",
                   transcript, re.IGNORECASE)
     phrase = m.group(1) if m else transcript
@@ -151,4 +162,4 @@ def parse_label(transcript):
         if w.lower().strip(".,!?") in _CLAUSE_WORDS:
             break
         words.append(w)
-    return " ".join(words[:5]).rstrip(".,!?") or "unnamed"
+    return " ".join(words[:5]).rstrip(".,!?").lower() or "unnamed"

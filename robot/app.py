@@ -129,8 +129,17 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
              background:var(--line) }
   .meta { font-size:12px; color:var(--violet) }
   #log { margin-top:18px; font-size:12px; color:var(--dim); line-height:1.7 }
-  #status { flex:0 0 auto; display:none; padding:9px 16px; background:var(--ink);
-            color:#fff; font-size:14px }
+  /* Reserve the row permanently and toggle visibility, never display. Toggling
+     display made the button bar jump ~37 px on every action and back again when
+     the message faded, which reads as a hitch on the one control the operator is
+     watching. line-height is pinned so the row's height is exactly 9+20+9=38 px
+     and cannot lose to a UA's font metrics by a pixel; nowrap keeps a long
+     transcript from wrapping to two lines and reintroducing the shift.
+     visibility:hidden hides the dark background too, so an empty row simply
+     reads as panel padding. */
+  #status { flex:0 0 auto; visibility:hidden; height:38px; padding:9px 16px;
+            background:var(--ink); color:#fff; font-size:14px; line-height:20px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
   #bar { flex:0 0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px;
          padding:10px; background:#e2e8ea;
          padding-bottom:calc(10px + env(safe-area-inset-bottom)) }
@@ -258,7 +267,9 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       shownSeq = s.status_seq;
     }
     const show = msg && (s.busy || Date.now() - statusAt < 6000);
-    $('status').style.display = show ? 'block' : 'none';
+    // visibility, not display: the row is always in the layout (see the CSS)
+    // so showing a message cannot move the buttons under a waiting finger.
+    $('status').style.visibility = show ? 'visible' : 'hidden';
     $('status').textContent = msg;
   }
 
@@ -811,6 +822,11 @@ class LiveApp:
         phone path uploads its own WAV and calls _process directly."""
         wav = UTTERANCE_WAV
         self.banner = "LISTENING · speak now"
+        # NO early encoder warm here, unlike on_listen: a cold model load
+        # holds the GIL in 1.4-1.6 s blocks (measured), and record_wav below
+        # must re-enter stream.read every 100 ms — warming during the
+        # recording overflows PortAudio's buffer and chops the audio. The
+        # phone path records on the phone, so it has nothing to starve.
         try:
             spoke = audio.record_wav(wav)  # stops itself after trailing silence
         except Exception as e:
@@ -849,6 +865,13 @@ class LiveApp:
             kept = audio.trim_to_speech(wav)
             if kept:
                 print(f"trimmed the hold down to {kept:.1f} s of speech")
+            # The models this action needs load lazily, and the warm that
+            # started at pointerdown may still be running — this call waits on
+            # its lock rather than building the same model twice. Before the
+            # transcribe, so Whisper is certainly loaded; before the live-state
+            # lock, so a first-of-session load can't freeze the detect thread
+            # long enough to start killing tracks.
+            models.warm_encoders(kind)
             # Whisper takes seconds; run it before claiming the lock so the
             # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
@@ -877,10 +900,30 @@ class LiveApp:
             # before `busy` is cleared and wedge the robot
             self.busy = False
 
+    def _warm_quietly(self, kind):
+        """warm_encoders for a background thread: a failed load (transient
+        download, full disk) must be one log line, not a traceback storm —
+        the action itself retries the load and reports its own failure."""
+        try:
+            models.warm_encoders(kind)
+        except Exception as e:
+            print(f"encoder warm failed (the action will retry): {e}")
+
     def on_listen(self, kind):
         """Phone started hold-to-talk. Narrate LISTENING and, for teach,
         stash the crop in focus now — the object may drift before release."""
         self.banner = "LISTENING · speak now"
+        # Start loading Whisper (and Nomic) NOW, under the hold: the first
+        # voice action of a session otherwise pays ~7 s of model loads after
+        # the finger lifts. _process re-calls this and waits on its lock, so
+        # a quick release cannot race the warm into a double build. Honest
+        # cost, once per session: a cold load holds the GIL in 1.4-1.6 s
+        # blocks, so the feed pauses while "LISTENING" is up instead of after
+        # release behind "thinking...". Relocated, not removed. Safe for
+        # tracking because the hold is ~3 s against DEAD_SECONDS = 5.0 —
+        # tracks ride it out; that margin is the load-bearing part.
+        threading.Thread(target=self._warm_quietly, args=(kind,),
+                         daemon=True).start()
         if kind == "t":
             f = self.robot.teachable
             got = f is not None and f.crop is not None
