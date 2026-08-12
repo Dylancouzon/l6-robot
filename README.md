@@ -49,6 +49,33 @@ uv run python -m robot.app
 
 The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo).
 
+### Running On A Jetson Orin Nano
+
+The same two commands work. Four things are worth knowing on the 8 GB board:
+
+- **Torch prints a compute-capability warning** ("No published PyTorch CUDA builds ... support this GPU"). It is harmless: Orin is `sm_87` and executes the wheel's `sm_80` kernels. CUDA is genuinely in use — the detector runs at roughly 165 ms per frame at `imgsz=640`, against seconds per frame on CPU. Confirm with:
+
+  ```bash
+  uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+  ```
+
+- **Only the CLIP vision encoder loads at startup** (see `warm_up` in `robot/models.py`). Speech and text encoders load the first time you teach or ask. Loading all four up front needs about 3.3 GB before the camera even opens, which pushes the board into swap — and a swapping robot updates the view once every several seconds. Expect roughly 2.5 GB after startup and 4 GB once you have taught something.
+
+- **Keep the stock 15 W power mode.** The bottleneck here is memory and the USB camera, not the GPU, so `jetson_clocks` and MAXN buy nothing.
+
+- **"System throttled due to Over-current" will pop up repeatedly, and it is expected.** `OC3` counts *instantaneous* power spikes on `VDD_IN`, caught by a hardware comparator far too fast for the INA3221 sensor to sample — which is why `tegrastats` shows you nowhere near the limit while the counter climbs. Bursty GPU inference trips it; sustained draw here is about 1.9 A against a 4.05 A critical limit, CPU clocks hold at maximum, and per-frame detector latency stays flat. `OC1` and `OC2` (the averaged thresholds) stay at zero. NVIDIA describes the throttle as protective, not damage. Check the counters with:
+
+  ```bash
+  cat /sys/devices/platform/soctherm-oc-event/hwmon/hwmon*/oc?_event_cnt
+  ```
+
+  The popup comes from the nvpmodel tray applet, which polls those counters every second and re-fires while any of them increments. To stop the notifications without touching the hardware protection, either tick **Disable notification** in the tray menu (resets at login) or hide the applet's autostart entry:
+
+  ```bash
+  cp /etc/xdg/autostart/nvpmodel_indicator.desktop ~/.config/autostart/
+  echo "Hidden=true" >> ~/.config/autostart/nvpmodel_indicator.desktop
+  ```
+
 ## Controls
 
 | Control | Action |

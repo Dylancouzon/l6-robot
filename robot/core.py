@@ -88,9 +88,12 @@ class Robot:
 
     # -- teach -----------------------------------------------------------------
 
-    def teach(self, crop, wav_path):
-        """One spoken sentence → one point carrying BOTH named vectors."""
-        transcript = models.transcribe(wav_path)
+    def teach(self, crop, transcript):
+        """One spoken sentence → one point carrying BOTH named vectors.
+
+        Takes the transcript, not the WAV: speech-to-text is slow, so the
+        caller runs it before claiming the live-state lock.
+        """
         label = audio.parse_label(transcript)
         pid = self.memory.teach(
             image_vec=models.embed_crop(crop),
@@ -124,10 +127,6 @@ class Robot:
             clip_text_vec=models.embed_query_clip(question),
             since_ts=day_start_ts() if since_ts is None else since_ts,
         )
-
-    def ask_from_wav(self, wav_path, since_ts=None):
-        question = models.transcribe(wav_path)
-        return question, self.ask(question, since_ts)
 
     # -- the reboot beat ---------------------------------------------------------
 
