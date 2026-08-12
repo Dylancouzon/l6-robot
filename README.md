@@ -151,6 +151,22 @@ Teach objects, not surfaces. A crop with little information in it — a blank pa
 
 Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, `F` / **FORGET** it and teach again.
 
+### What to say
+
+**Speak a phrase, not a single word.** "This is my laptop" is recognized reliably; "laptop" on its own often is not. Whisper-base leans on surrounding words to pin down a short one, and a bare noun gives it nothing to lean on — a real capture of one isolated word came back as `La-caw`. The phrase is also what `parse_label` is built to read: it takes the words after "this is" and stops at the first new clause, so *"This is my mug, Maria made it"* teaches `my mug`.
+
+**Release the button when you stop talking.** Holding it open for a few extra seconds used to cost twice: Whisper charges for every second of audio, and given a stretch of silence it starts repeating itself — a 7.7 s hold around 1.4 s of speech transcribed to `L L L L L L…` and took 16.3 s. Silence is now trimmed off both ends before transcription (2.0 s and 5.2 s for that same clip), so a long hold costs you little — **as long as the robot can find your speech in it**. Speak up: the trim looks for audio above a fixed bar, and a hold too quiet to clear it is passed to Whisper whole, repeated letters and all. The `rms` in the log is the number to watch.
+
+The log prints what it heard and what it kept, which is where to look first when a label comes out wrong:
+
+```
+recorded level (rms): 1641
+trimmed the hold down to 2.0 s of speech
+taught "my laptop": 'This is my laptop.'
+```
+
+An `rms` of 0 means no audio reached the robot at all — that is a browser mic permission, not a recognition problem.
+
 ## Phone Or Tablet Demo
 
 Run the app on the robot or laptop with:
@@ -160,6 +176,8 @@ uv run python -m robot.app --host 0.0.0.0
 ```
 
 The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the certificate warning once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+
+The page opens the mic on your first touch anywhere and **keeps it open** while the tab lives, so your browser shows a recording indicator the whole time. That is deliberate: opening the device and compiling the audio worklet per press takes long enough that the start of a promptly-spoken word lands before recording begins, and it does that work on the same main thread that is painting the video feed. Close the tab to release the mic. Audio is captured at 16 kHz — what Whisper wants — so what goes up the link is a third of the bytes a 48 kHz capture would send.
 
 ### Why HTTPS, And Why The Warning
 
@@ -183,7 +201,7 @@ This works offline in either setup:
 - Or make the robot a hotspot:
 
 ```bash
-sudo nmcli device wifi hotspot ssid l6-robot password <password>
+sudo nmcli device wifi hotspot ssid l6-robot password <password> band a channel 44
 uv run python -m robot.app --host 0.0.0.0 --advertise 10.42.0.1
 ```
 
@@ -242,7 +260,7 @@ Five things, each reversible on its own:
 | Change | Why | Undo |
 |---|---|---|
 | Installs and enables `l6-robot.service` | Starts the robot at boot and restarts it if it dies | `sudo systemctl disable --now l6-robot` |
-| Adds an `l6-hotspot` Wi-Fi profile in AP mode, and sets saved networks to not autoconnect | One radio cannot be an access point and a client at once, and the robot must work where there is no network | `sudo nmcli con delete l6-hotspot`, then re-enable autoconnect on your own network |
+| Adds an `l6-hotspot` Wi-Fi profile in AP mode on **5 GHz channel 44**, and sets saved networks to not autoconnect | One radio cannot be an access point and a client at once, and the robot must work where there is no network. The band is not incidental — see [The Feed Is The Bottleneck](#the-feed-is-the-bottleneck) | `sudo nmcli con delete l6-hotspot`, then re-enable autoconnect on your own network |
 | `systemctl set-default multi-user.target` | Frees roughly 1.5 GB of GNOME on an 8 GB board, next to a robot process that reaches 3.4 GB. It also retires the over-current popup, which is a desktop applet | `sudo systemctl set-default graphical.target` |
 | Generates ssh host keys and starts `sshd` | The only way into a box with no peripherals. A missing host key leaves `sshd` enabled but dead, which you discover at the worst moment | — |
 | Fills the model cache under `$HOME` | `FastEmbed` defaults to `/tmp`, which `systemd-tmpfiles` prunes at 30 days. Losing 1.1 GB of encoders on a robot with no internet means it boots into a download that never finishes | — |
@@ -265,6 +283,23 @@ Two behaviours worth knowing before you debug them:
 
 - **A crash is invisible and self-healing.** The service restarts 10 seconds later and takes about 40 seconds to reload the detector, so an unplugged camera looks like a robot that is simply slow to come back. `journalctl -u l6-robot` is where the reason is.
 - **The service runs with `--watchdog 30`.** A USB camera that wedges *inside* a driver call cannot be noticed by the thread stuck in it, so the app exits if no frame arrives for 30 seconds and lets systemd restart it. If you ever see a restart with no error above it, that was this.
+
+### The Feed Is The Bottleneck
+
+The live view is MJPEG, and the composed 1760x720 frame is about 183 KB. At the camera's 10 fps that is **~13 Mbps** of video the robot has to push over its own hotspot — far more than anything else the demo does.
+
+That number is why the hotspot is on 5 GHz. A 2.4 GHz access point at 20 MHz carries 15–25 Mbps in an empty room and much less in a hall full of phones, so the radio becomes the narrowest part of the chain. When that happens the failure is not a dropped frame: TCP queues what it cannot send, so the feed arrives smooth but **seconds behind the room**, and the delay grows the longer you watch. Pressing TEACH on an object you can no longer see is the symptom that ruins a demo.
+
+The trade is range. 5 GHz carries less far and through less material, so keep the phone in the same room as the robot rather than across a hall.
+
+If the feed still lags — an unavoidably crowded band, or a client stuck on 2.4 GHz — the one number to turn is `STREAM_QUALITY` in `robot/app.py`. Dropping it from 85 to 70 takes the frame to ~134 KB and the stream to ~11 Mbps, for a slightly softer image. Check what you are actually up against first:
+
+```bash
+iw dev wlP1p1s0 info                      # which band and channel the AP is really on
+timeout 5 curl -sk https://127.0.0.1:8765/stream -o /dev/null -w '%{size_download}\n'
+```
+
+The second command measures what the robot *wants* to send, over loopback, with the radio out of the picture. Divide by 5 for bytes per second. If that number is comfortable and the phone still lags, the problem is the link, not the robot.
 
 ## Project Layout
 

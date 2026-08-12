@@ -82,6 +82,58 @@ def is_silent(path, rms_floor=120):
     return wav_rms(path) < rms_floor
 
 
+def trim_to_speech(path, pad=0.2):
+    """Cut the quiet off both ends in place, so Whisper hears the utterance
+    rather than the button hold. Returns the new duration, or None if it left
+    the file alone.
+
+    This matters more than it looks. Measured on a real 7.7 s capture holding
+    1.4 s of speech: whole, it transcribed to "L L L L L L..." in 16.3 s; cut to
+    2.0 s, the same audio gave words in 5.2 s. Whisper hallucinates repetitions
+    when it is handed seconds of silence, and it charges for every second it is
+    given — so a generous hold costs both the label and the wait an operator
+    reads as a freeze.
+
+    Same SPEECH_RMS bar record_wav stops on, so both mic paths agree on what
+    counts as speech, and `pad` is rounded down to whole 100 ms blocks like the
+    rest of the arithmetic here.
+
+    Fails open, which leaves one gap worth knowing: is_silent passes a clip at
+    rms 120 and up, but nothing is trimmed unless a block reaches SPEECH_RMS
+    (200), so a hold too quiet to find speech in goes to Whisper whole and can
+    still hallucinate. Deliberate — guessing at where the speech was in a clip
+    this quiet is worse than the rms line in the log telling the operator to
+    speak up.
+    """
+    import numpy as np
+    with wave.open(str(path)) as w:
+        if w.getnchannels() != 1 or w.getsampwidth() != 2:
+            return None      # both writers make 16-bit mono; don't guess
+        rate = w.getframerate()
+        samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    block = max(1, rate // 10)          # 100 ms, as in record_wav
+    blocks = len(samples) // block
+    if not blocks:
+        return None
+    level = np.sqrt(np.mean(
+        samples[:blocks * block].astype(np.float64).reshape(blocks, -1) ** 2,
+        axis=1))
+    loud = np.flatnonzero(level >= SPEECH_RMS)
+    if not len(loud):
+        return None
+    keep = max(1, int(pad * rate) // block)
+    a = max(0, loud[0] - keep) * block
+    b = min(len(samples), (loud[-1] + 1 + keep) * block)
+    if b - a >= len(samples):
+        return None
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples[a:b].tobytes())
+    return (b - a) / rate
+
+
 # ASR often drops the punctuation that would end the naming clause, so the
 # label also stops at words that start a new clause ("...my mug I bought it").
 _CLAUSE_WORDS = {"i", "it", "and", "that", "which", "because", "she", "he",

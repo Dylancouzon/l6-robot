@@ -55,6 +55,11 @@ PANEL_W = 480
 FONT = cv2.FONT_HERSHEY_DUPLEX
 PORT = 8765
 UTTERANCE_WAV = "/tmp/l6-utterance.wav"  # one buffer; the busy gate serializes writes
+# The composed 1760x720 view costs ~183 KB at 85, ~134 KB at 70, so at the
+# camera's 10 fps this is the difference between 15 and 11 Mbps on the wire.
+# Turn it down only if the feed lags on a congested 2.4 GHz channel: the 5 GHz
+# hotspot carries either with room to spare. See "Streaming over the hotspot".
+STREAM_QUALITY = 85
 
 PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -115,29 +120,72 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     "registerProcessor('rec',Rec)"], {type:'text/javascript'}));
   let ctx, stream, chunks = [], holding = false, rate = 16000;
 
+  // Open the mic ONCE and keep it. This used to run per press: getUserMedia,
+  // a fresh AudioContext and a worklet compile, all after the finger was
+  // already down, and nothing is captured until they finish. Speak promptly
+  // and the front of the word is simply not in the file. Keeping it warm also
+  // spares the page that work on every press, which is main-thread work in the
+  // same tab that is rendering the MJPEG feed.
+  // Asking for 16 kHz is what Whisper wants anyway, and it means the browser
+  // resamples rather than sending 3x the bytes up the same Wi-Fi link the feed
+  // is coming down. Browsers that ignore the option report their real rate in
+  // ctx.sampleRate, so the WAV header stays honest either way.
+  let micReady;
+  function mic() {
+    // Memoize the promise, not the context: ctx is only assigned after three
+    // awaits, so an `if (ctx) return` guard lets the warm-up listener and the
+    // first button press both get past it, and two worklet nodes pushing into
+    // one chunk list is audio recorded twice over. On failure, forget it so the
+    // next press can retry.
+    if (!micReady) micReady = openMic().catch(e => { micReady = null; throw e; });
+    return micReady;
+  }
+  async function openMic() {
+    // Replacing a dead one: close it first, or a demo that loses the mic a few
+    // times walks into the browser's limit on live AudioContexts.
+    if (ctx) { ctx.close().catch(() => {}); ctx = null; }
+    stream = await navigator.mediaDevices.getUserMedia(
+      { audio: { echoCancellation: true, noiseSuppression: true } });
+    ctx = new (window.AudioContext || window.webkitAudioContext)(
+      { sampleRate: 16000 });
+    await ctx.resume();
+    await ctx.audioWorklet.addModule(WORKLET);
+    rate = ctx.sampleRate;
+    const node = new AudioWorkletNode(ctx, 'rec');
+    node.port.onmessage = e => { if (holding) chunks.push(e.data); };
+    ctx.createMediaStreamSource(stream).connect(node);
+    // A kept mic can still die under you: the track ends if permission is
+    // pulled or the input device changes. Forget the memo so the next press
+    // opens a fresh one, rather than recording silence behind a healthy-looking
+    // indicator until someone reloads the tab. The per-press code that this
+    // replaced got that for free.
+    stream.getTracks().forEach(t => { t.onended = () => { micReady = null; }; });
+  }
+  // Warm it on the first touch anywhere, so the first TEACH of the demo is not
+  // the one that misses its own first word. Both getUserMedia and resume() want
+  // a user gesture, so this cannot happen at load.
+  addEventListener('pointerdown', () => mic().catch(() => {}), { once: true });
+
   async function start(kind, btn) {
     if (holding) return;
     holding = true; chunks = []; btn.classList.add('rec');
     fetch('/listen?k=' + kind);   // narrate "LISTENING" on the filmed view
     try {
-      stream = await navigator.mediaDevices.getUserMedia(
-        { audio: { echoCancellation: true, noiseSuppression: true } });
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      await ctx.resume();
-      await ctx.audioWorklet.addModule(WORKLET);
-      rate = ctx.sampleRate;
-      const node = new AudioWorkletNode(ctx, 'rec');
-      node.port.onmessage = e => chunks.push(e.data);
-      ctx.createMediaStreamSource(stream).connect(node);
+      await mic();
+      // A backgrounded tab suspends the context (iOS does it for an incoming
+      // call too), and a suspended context records nothing. We are inside a
+      // user gesture here, which is the one place resume() is allowed.
+      if (ctx.state !== 'running') await ctx.resume();
     } catch (e) {
       holding = false; btn.classList.remove('rec'); alert('mic unavailable: ' + e);
     }
   }
-  async function stop(kind, btn) {
+  function stop(kind, btn) {
     if (!holding) return;
     holding = false; btn.classList.remove('rec');
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    if (ctx) await ctx.close();
+    // The mic stream and the AudioContext stay open on purpose: closing them
+    // is what made the next press start late. The browser shows a recording
+    // indicator for as long as the tab is open; that is the price.
     fetch('/audio?k=' + kind, { method: 'POST', body: encodeWav(chunks, rate) });
   }
   function encodeWav(chunks, rate) {
@@ -452,14 +500,26 @@ class StreamHandler(BaseHTTPRequestHandler):
                     "Content-Type",
                     "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
+                # Send each composed frame once, and always the newest one.
+                # This used to push on a fixed 0.04 s tick while the pump
+                # renders at the camera's 10 fps, so 60% of the bytes on the
+                # wire were the same frame sent again — free on Ethernet,
+                # fatal on the appliance's own hotspot, where the radio is the
+                # bottleneck and TCP answers oversubscription by queueing
+                # rather than dropping: the feed goes slideshow and the delay
+                # grows without bound. Taking the latest shot means a client
+                # that falls behind loses frames instead of accumulating lag.
+                last = -1
                 while not self.app.stop.is_set():
-                    jpeg = self.app.jpeg
-                    if jpeg:
-                        self.wfile.write(
-                            b"--frame\r\nContent-Type: image/jpeg\r\n"
-                            + f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
-                            + jpeg + b"\r\n")
-                    time.sleep(0.04)
+                    shot = self.app.shot
+                    if shot is None or shot[0] == last:
+                        time.sleep(0.01)
+                        continue
+                    last, jpeg = shot
+                    self.wfile.write(
+                        b"--frame\r\nContent-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
+                        + jpeg + b"\r\n")
             elif self.path.startswith("/key?k="):
                 self.app.keys.put(self.path[-1])
                 self.send_response(204)
@@ -503,7 +563,8 @@ class LiveApp:
         self.banner = None
         self.card = None   # ("taught", {...}) or ("answer", (q, results))
         self.mem_count = 0
-        self.jpeg = None   # latest composed view, ready for the stream
+        self.shot = None   # (seq, jpeg): latest composed view for the stream
+        self._seq = 0      # bumped per composed frame; see _publish
         self.keys = queue.Queue()
         self.busy = False  # a voice action is running; ignore T/A meanwhile
         # What the robot attends to lives on the robot (see Robot.attention),
@@ -531,9 +592,21 @@ class LiveApp:
                            focused, self.banner, self.card,
                            self.robot.memory.threshold, self.robot.memory.where)
         ok, buf = cv2.imencode(".jpg", np.hstack([view, panel]),
-                               [cv2.IMWRITE_JPEG_QUALITY, 85])
+                               [cv2.IMWRITE_JPEG_QUALITY, STREAM_QUALITY])
         if ok:
-            self.jpeg = buf.tobytes()
+            self._publish(buf)
+
+    def _publish(self, buf):
+        """Hand a composed JPEG to the stream handler, stamped with a sequence
+        number so it can send each frame exactly once.
+
+        One tuple, assigned in one bytecode: the number and the bytes can never
+        disagree, which a pair of separate attributes could. Only the pump
+        thread publishes (splash runs before it starts), so the bump needs no
+        lock.
+        """
+        self._seq += 1
+        self.shot = (self._seq, buf.tobytes())
 
     def _voice_action(self, kind, crop):
         """Laptop escape hatch: record via sounddevice, then process. The
@@ -573,6 +646,11 @@ class LiveApp:
                 self.banner = "didn't hear anything, try again"
                 return
             self.banner = "thinking..."
+            # Hand Whisper the utterance, not the hold: silence on either end
+            # both slows it down and makes it hallucinate. See trim_to_speech.
+            kept = audio.trim_to_speech(wav)
+            if kept:
+                print(f"trimmed the hold down to {kept:.1f} s of speech")
             # Whisper takes seconds; run it before claiming the lock so the
             # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
@@ -669,7 +747,7 @@ class LiveApp:
                   (400, 400), 0.7, VIOLET, 1)
             ok, buf = cv2.imencode(".jpg", img)
             if ok:
-                self.jpeg = buf.tobytes()
+                self._publish(buf)
 
         try:
             splash("warming up...")
