@@ -393,6 +393,27 @@ Each of these was investigated and closed. Reopen only with new evidence.
   which is what lets the phone grant mic access. Verified: page and MJPEG stream
   both return 200 over the LAN IP. `sounddevice` stays a project dependency for
   laptop use.
+- **The cert warning cannot be removed, only made trustable.** No public CA will
+  sign a private LAN address, and reaching one needs internet this demo is built
+  not to need. What *was* wrong: the cert carried **no `subjectAltName` at all**
+  (`-subj /CN=l6-robot` only), and browsers stopped reading CN in 2017 — so it
+  named nothing, produced the harsher name-mismatch interstitial, and could not
+  have been fixed by trusting it. It was also valid 10 years, which Safari
+  rejects outright (>825 days) trusted or not. Now: SANs for the served IP plus
+  `127.0.0.1`/`localhost`/`<host>.local`, 397 days, and `basicConstraints
+  CA:TRUE` so a phone can install it as a root and stop warning for good —
+  Android will not install a leaf without `CA:TRUE`, iOS will. Served at
+  `/cert.crt` because a headless robot has no other easy way to hand a file to
+  a phone; that gives away nothing the TLS handshake already does.
+  Regenerated whenever the address changes, tracked by `cert/names.txt`, so
+  trust is per-address: a phone trusted on home Wi-Fi warns again at the booth.
+  Built with an openssl **config file**, not `-addext`, which the LibreSSL that
+  ships as `/usr/bin/openssl` on macOS does not have.
+  Verified end to end: with the cert loaded as a CA, hostname verification
+  passes over a real TLS handshake against `StreamHandler` (so a phone that has
+  installed it sees no warning), `/cert.crt` returns the bytes on the wire, an
+  untrusted client still refuses it, and an unchanged address does **not**
+  regenerate — a phone you trusted stays trusted across restarts.
 - Close Firefox and the Codex/ChatGPT Electron app before demoing. They hold
   ~3 GB and are the only reason swap appeared in late measurements.
 - `uv sync --locked --dry-run` wants to swap `nvidia-cusparselt-cu13 0.8.1`. It is

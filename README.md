@@ -157,7 +157,23 @@ Run the app on the robot or laptop with:
 uv run python -m robot.app --host 0.0.0.0
 ```
 
-The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the self-signed certificate once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the certificate warning once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+
+### Why HTTPS, And Why The Warning
+
+Browsers only hand out the microphone in a **secure context**. `http://localhost` counts as one, but `http://192.168.x.x` does not — so the moment the interface moves to your phone, the app has to serve HTTPS. It generates a self-signed certificate into `cert/` on first run.
+
+The warning appears because nothing vouches for that certificate. It is not a misconfiguration and it cannot be coded away: a public certificate authority will not sign a certificate for a private LAN address, and reaching one would need internet access this demo is designed not to need. Accepting it once per device is the normal path, and the mic works fine afterwards.
+
+**To get rid of the warning on your own demo phone** — worth doing before filming — install the certificate as trusted, once:
+
+1. Open `https://<lan-ip>:8765/cert.crt` on the phone and accept the warning one last time to download it.
+2. **iOS/iPadOS:** Settings → General → VPN & Device Management → install the downloaded profile. Then, and this step is easy to miss, Settings → General → About → **Certificate Trust Settings** → enable full trust for `l6-robot`.
+3. **Android:** Settings → Security → Encryption & credentials → Install a certificate → **CA certificate** → pick the downloaded file.
+
+Reload the page and the warning is gone for good on that device.
+
+The certificate names the IP address it was generated for, so it is regenerated automatically whenever the robot's address changes — which means a phone you trusted on your home Wi-Fi will warn again on the booth network, or after switching to hotspot mode. Trust it once per address you demo on. Certificates are valid for 397 days; Safari rejects anything much longer, trusted or not.
 
 This works offline in either setup:
 

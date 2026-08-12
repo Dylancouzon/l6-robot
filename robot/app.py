@@ -172,19 +172,49 @@ def _lan_ip():
         s.close()
 
 
-def _ensure_cert():
+def _ensure_cert(ip):
     """Self-signed cert so the phone browser treats the page as a secure
     context — getUserMedia refuses plain http. openssl ships on macOS and
-    JetPack; the cert lives in ./cert (gitignored). Returns (cert, key)."""
+    JetPack; the cert lives in ./cert (gitignored). Returns (cert, key).
+
+    Two details decide how loudly the browser complains, and both are easy to
+    get wrong:
+
+    * It must carry a **subjectAltName** for the address you actually open.
+      Browsers stopped reading the CN field in 2017, so a CN-only cert is not
+      merely untrusted, it names nothing — which is a harsher warning, and
+      cannot be fixed by trusting the cert. Hence the SAN list below.
+    * Validity must stay under 825 days or Safari refuses it outright, trusted
+      or not. 397 days keeps us inside the stricter modern limit too.
+
+    `CA:TRUE` is deliberate: it lets a phone install this as a trusted root
+    once and stop warning for good (see the README). Regenerated whenever the
+    address changes, because a cert for the old IP names the wrong machine.
+    """
     root = Path(__file__).resolve().parent.parent / "cert"
-    cert, key = root / "cert.pem", root / "key.pem"
-    if not (cert.exists() and key.exists()):
-        root.mkdir(exist_ok=True)
-        subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-             "-keyout", str(key), "-out", str(cert), "-days", "3650",
-             "-subj", "/CN=l6-robot"],
-            check=True, capture_output=True)
+    cert, key, named = root / "cert.pem", root / "key.pem", root / "names.txt"
+    # localhost and 127.0.0.1 stay valid so the laptop view works off the same
+    # cert; the .local name is for whoever has mDNS working
+    want = ",".join([f"IP:{ip}", "IP:127.0.0.1", "DNS:localhost",
+                     f"DNS:{socket.gethostname().split('.')[0]}.local"])
+    if (cert.exists() and key.exists() and named.exists()
+            and named.read_text() == want):
+        return str(cert), str(key)
+    root.mkdir(exist_ok=True)
+    # a config file, not -addext: the latter is missing from the LibreSSL that
+    # ships as /usr/bin/openssl on macOS
+    conf = root / "openssl.cnf"
+    conf.write_text(
+        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
+        "[dn]\nCN=l6-robot\n"
+        f"[ext]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName={want}\n")
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(key), "-out", str(cert), "-days", "397",
+         "-config", str(conf)],
+        check=True, capture_output=True)
+    named.write_text(want)
+    print(f"generated a certificate for {ip} (valid 397 days)")
     return str(cert), str(key)
 
 
@@ -386,14 +416,26 @@ def _wrap(s, width):
 
 
 class StreamHandler(BaseHTTPRequestHandler):
-    app = None  # set by LiveApp
+    app = None   # set by LiveApp
+    cert = None  # path to the served cert, when running HTTPS
 
     def log_message(self, *args):
         pass
 
     def do_GET(self):
         try:
-            if self.path == "/":
+            if self.path.startswith("/cert.crt") and self.cert:
+                # Hand the cert to the phone so it can be trusted once and stop
+                # warning. A headless robot has no other easy way to deliver a
+                # file, and this is the same cert already on the wire — serving
+                # it publicly gives away nothing the TLS handshake doesn't.
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-x509-ca-cert")
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="l6-robot.crt"')
+                self.end_headers()
+                self.wfile.write(Path(self.cert).read_bytes())
+            elif self.path == "/":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
@@ -582,10 +624,12 @@ class LiveApp:
         StreamHandler.app = self
         server = ThreadingHTTPServer((host, PORT), StreamHandler)
         loopback = host in ("127.0.0.1", "localhost")
+        addr = host if loopback else _lan_ip()
         scheme = "http"
         if not loopback:  # phone mic needs HTTPS (a secure context)
             try:
-                cert, key = _ensure_cert()
+                cert, key = _ensure_cert(addr)
+                StreamHandler.cert = cert  # offered at /cert.crt, see do_GET
                 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 ctx.load_cert_chain(cert, key)
                 server.socket = ctx.wrap_socket(server.socket, server_side=True)
@@ -594,8 +638,15 @@ class LiveApp:
                 print(f"HTTPS setup failed ({e}); serving HTTP, so the phone mic "
                       "will not work, but the stream and REBOOT/quit still do.")
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        url = f"{scheme}://{host if loopback else _lan_ip()}:{PORT}"
+        url = f"{scheme}://{addr}:{PORT}"
         print(f"live view: {url}  (keys work in the browser tab)")
+        if scheme == "https":
+            # Nobody vouches for a self-signed cert, so the first visit always
+            # warns. Say so here rather than letting it look like a failure.
+            print("the browser will warn once (nothing vouches for a "
+                  "self-signed cert): accept it and the mic will work.\n"
+                  f"to silence it for good on your demo phone, open {url}"
+                  "/cert.crt and trust it — see the README.")
 
         def splash(msg):
             print(msg)
