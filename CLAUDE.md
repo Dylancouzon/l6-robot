@@ -44,6 +44,17 @@ impossible. The stream now carries the annotated feed only and the page polls
 bandwidth); **not yet looked at by the operator on a phone.** See "The panel is
 HTML now" below.
 
+**Eighth issue, same day: recognized objects came and went on a static scene,
+and teach seemed to freeze.** Neither was the threshold and neither was new.
+The cause was `DEAD_SECONDS = 1.5` destroying a `Track` on a routine detector
+dropout, so the object returned as a stranger. **A move to 0.88 was measured on
+the live shard and refused** — it buys 2 recognitions and 5 mislabels, and the
+score series that looked like a knife-edge belonged to the mirror, an UNKNOWN
+that *should* not match. Fixed: `DEAD_SECONDS` 5.0, `FOCUS_MARGIN` 1.6, Nomic
+loading outside the lock, and the status row no longer shifting the layout. Two
+hazards found and left alone on purpose (a permanent person-blacklist, and lens
+distortion). See "Objects came and went on a static scene" below.
+
 ## Goal and constraints
 
 - Target: Jetson Orin Nano Super 8 GB, Ubuntu 24.04/aarch64, Jetson Linux R39.2 /
@@ -74,6 +85,14 @@ HTML now" below.
   **merged** into `main` as of 2026-08-12. As with #3, it merged before the
   operator confirmed it on the device: **a cold boot with the desktop gone has
   still not been proven.**
+- PRs #6 (streaming + voice) and #7 (the HTML panel) are **merged** into `main`
+  as of 2026-08-12. Both merged before the operator saw the panel on a phone;
+  that is still unconfirmed.
+- Branch: `codex/track-lifetime-and-focus`, one commit ahead of `main`: the work
+  under "Objects came and went on a static scene" — `DEAD_SECONDS`,
+  `FOCUS_MARGIN`, `warm_encoders`, and the status row. No new dependencies. It
+  also **refuses** a threshold move to 0.88 on measurement, which is the part to
+  read before anyone tries it again.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -160,6 +179,15 @@ Sharp knee between 0.80 and 0.85, flat from 0.90 up. Hence `0.90`.
 same-object pairs (0.887, 0.899). The threshold is justified by the live
 measurement, not by the testdata. If recognition starts dropping objects that
 turn or relight, 0.88 is the next stop — re-measure, don't guess.
+
+> **That re-measure has since been done, and 0.88 was refused.** On the live
+> shard it buys 2 recognitions and 5 mislabels, and no taught view gains a
+> single one of its own sightings, because the misses sit at 0.75–0.81 rather
+> than just under the bar. Read "Objects came and went on a static scene" before
+> acting on the paragraph above — the sentence "0.88 is the next stop" is what
+> nearly caused a regression, and the thing that saved it was checking whether
+> the near-bar scores belonged to an object that *should* match. They did not:
+> they were a mirror.
 
 ### What changed
 
@@ -270,8 +298,9 @@ therefore traded the box several times a second, and only one unknown is ever
 displayed or teachable — so the teach target could change between deciding to
 press and pressing.
 
-- `focused()` is now sticky with `FOCUS_MARGIN = 1.25` in `robot/core.py`: the
-  incumbent keeps focus until a challenger is 25% more salient or its track
+- `focused()` is now sticky with `FOCUS_MARGIN` in `robot/core.py` (**1.6 now,
+  raised from the 1.25 this section shipped** — see "Objects came and went"): the
+  incumbent keeps focus until a challenger is that much more salient or its track
   leaves the candidate list. It is an instance method now, holding
   `self._incumbent` — **keyed by the `Track` object, not by `tid`**. See the
   trap below; do not "simplify" it back to ids.
@@ -288,7 +317,10 @@ press and pressing.
   capped at `STABLE_FRAMES + 1` on the way up) instead of resetting to 0. A
   reset hid an established box for three more detect passes on a single
   detector blink, which was most of the visible flicker. Death is still
-  time-based via `DEAD_SECONDS`.
+  time-based via `DEAD_SECONDS` — **now 5.0 s, not 1.5**; see "Objects came and
+  went on a static scene" below. Note which constant does what: this decay is
+  the *box's* lifetime, `DEAD_SECONDS` only decides whether the object comes
+  back as itself.
 
 The cap is deliberately one frame above the gate, not more. Every frame of
 credit is a frame in which an object that has *left* still has a box and a
@@ -298,10 +330,11 @@ blank-crop poisoning described under "Recognition threshold". One blink of
 tolerance buys the flicker fix; three would widen that window for nothing.
 
 If the box still feels twitchy, `FOCUS_MARGIN` is the one number to turn up.
-1.25 was picked by eye as a value comfortably above frame-to-frame jitter and
-comfortably below a deliberate move; it was **not** measured against live
-footage. Raising it makes focus harder to move on purpose, which is its own
-failure.
+1.25 was picked by eye and **was not enough** — it shipped at 1.25 and was later
+raised to 1.6 on an operator report plus a measured baseline of 3.5 focus
+switches per minute; see "Objects came and went on a static scene". Raising it
+makes focus harder to move on purpose, which is its own failure, and **nobody
+has measured a deliberate takeover at 1.6.** That is the thing to watch.
 
 ### Two traps found in review, both closed — don't reopen them
 
@@ -324,8 +357,10 @@ neither would have shown up on the bench quickly.
 ### Rejected here
 
 - **A dwell timer on focus** (challenger must lead for N ms) on top of the
-  margin. The margin alone covers the jitter, and a second mechanism doing the
-  same job costs a learner more than it buys.
+  margin. A second mechanism doing the same job costs a learner more than it
+  buys. **The claim in this bullet that "the margin alone covers the jitter" was
+  wrong at 1.25** — it did not, and the operator said so. The timer is still
+  rejected, on a better argument now; see "Objects came and went".
 - **Debouncing the buttons.** The stutter was the work on the wrong thread, not
   the press rate. Once `_handle_key` is off the pump, a double-tap is harmless:
   the second FORGET finds the label already cleared and says so.
@@ -788,6 +823,163 @@ expensive part. RSS/threads unmoved at 2.47 GB / 19 under sustained polling.
 do not run under snap confinement here, so the layout is checked by endpoint
 tests and by construction, not by eye. Judge the portrait split and whether the
 type reads across a room; `#label` is `clamp(20px,4.5vw,30px)`.
+
+## Objects came and went on a static scene — and the bar was not the problem
+
+Reported together with "teach freezes into *thinking* for a few seconds". Two
+symptoms, and **the threshold change they seemed to call for was measured and
+refused.** Read that part before touching `RECOGNIZE_THRESHOLD` again.
+
+### The bar stays at 0.90. This was measured, not argued.
+
+The tempting move was 0.90 → 0.88, which CLAUDE.md had already pre-authorised
+("0.88 is the next stop"). It is wrong here, and the shard says so. Every
+sighting scored against every taught view, on the live shard (809 sightings,
+8 taught views):
+
+| bar | recognized | correct label | mislabelled | unrecognized |
+|---|---|---|---|---|
+| 0.90 | 768 | 724 | **44** | 41 |
+| 0.88 | 775 | 726 | **49** | 34 |
+| 0.86 | 785 | 728 | **57** | 24 |
+
+0.88 buys 2 more correct recognitions and 5 more mislabels. And per taught view
+the number of its own sightings missed is **identical** at both bars — 124/124,
+126/126, 74/74, 42/42, 78/78, 14/14, 0/0 — because the misses sit at 0.75–0.81,
+nowhere near the bar. Nothing is being dropped *just* under 0.90.
+
+The evidence that looked like a knife-edge was a **series belonging to an
+UNKNOWN** — the mirror, reading 0.86/0.87/0.89/0.90 on consecutive requeries.
+That is a degenerate reflective crop scoring against a taught object, i.e. the
+promiscuity the 0.90 calibration exists to prevent, and lowering the bar would
+have let it start claiming labels. Taught objects in the same frames were at
+0.92–0.98 throughout. The harness is `bar.py` in the session scratchpad
+(throwaway); it loads a **copy** of the shard so the live service is untouched,
+which is the way to re-run this.
+
+Lesson worth keeping: a score series near the bar means nothing until you know
+whether it belongs to an object that *should* match. Check that first.
+
+### What actually caused it: `DEAD_SECONDS`, and it was the wrong 1.5 s
+
+A real object's detector confidence swings either side of `DETECT_CONF`. Measured
+on the operator's own frames, the microphone's own proposal came back as
+`'camera'`/`'microphone'` at **0.34–0.91** against a floor of 0.30, and was
+absent altogether on some frames. Dropouts past a second are routine, so at
+`DEAD_SECONDS = 1.5` the `Track` was destroyed — taking `label`, `note`,
+`thumb`, `vec` and `last_query` with it — and the object returned as a stranger:
+nothing on screen for `STABLE_FRAMES` passes, then a fresh embed, then green
+again. **That is the "comes and goes", and the shard counts it:** 866 sighting
+thumbs, and in one 25-minute window 57 `Track` births across only 17 tracker
+ids, ids repeating (4315 twelve times, 5187 nine times). A repeating tracker id
+means the *tracker* never lost the object. Only our `Track` did.
+
+Now 5.0 s. BoT-SORT's own `track_buffer` is 30 frames — and a "frame" here is a
+detect pass, so 9–15 s of wall clock at the measured 0.1–0.6 s pass rate. 1.5 s
+was far stricter than the tracker underneath it. Safe because the box's
+lifetime is the `frames` decay, not this: two missed passes take a track under
+`STABLE_FRAMES`, and `Detector.process` returns only stable tracks — so a
+lingering track is not displayed, not embedded, not teachable, and **the
+stale-crop teaching window is not widened.** Side benefit: far fewer `sighted`
+resets, so the shard stops accumulating a thumbnail and a flushed upsert per
+rebirth.
+
+Residual risk, bounded: within `track_buffer` BoT-SORT can re-attach a buffered
+id to a different object that drifts into the old position, which now arrives
+wearing a stale label until its next requery (≤2 s). Not tid reuse — ids are
+monotonic within a run, and `reset()` clears `self.tracks` anyway. Reasoned, not
+observed.
+
+Measured after: **Track births 4.12/min → 2.33/min** (99 births in the 24 min
+before the restart, 43 in the 18.4 min after, excluding the first minute's
+startup burst, which necessarily reboots every track). Treat that as ~40% and no
+better: the windows are unequal and the scene was not controlled — a person was
+working at the desk throughout. An earlier reading of 1.80/min came from a
+7-minute window and did **not** hold up as the window grew; the honest figure is
+the one above.
+
+And be clear about what did **not** change: **box disappearances off `/stream`
+were 68 in 130 s before and 68 in 130 s after.** That is expected — the box's
+lifetime is the `frames` decay, not this constant — but it means the *visible
+blink* the operator sees is not reduced by this round. What is fixed is that the
+object comes back as itself, immediately, instead of as an unnamed stranger.
+Anyone who wants the blink itself gone has to make detection steadier (a lower
+`DETECT_CONF` is the free knob to try first) — not touch `DEAD_SECONDS` again.
+
+### The rest of the round
+
+- **`MAX_DET` is not the limit, and nothing is saturating.** The operator asked
+  whether undisplayed objects are still detected and whether a cap is being hit.
+  They are still detected *and CLIP-embedded* — only knowns plus one unknown are
+  ever drawn — but YOLOE emits **9–10 proposals per frame against
+  `MAX_DET = 64`**. Roughly 8 of ~10 stable tracks are embedded and discarded
+  every 2 s, which is real waste, and it explains **nothing the operator sees**:
+  detect passes measure 0.1–0.6 s (requery gaps 2.1–2.6 s against a 2.0 s
+  cadence), three times clear of even the old `DEAD_SECONDS`. A
+  `MAX_EMBEDS_PER_PASS` cap was designed against this and **cut** — the same
+  build-then-delete shape as the crop-quality and scene-relative gates. Do not
+  rebuild it without a measurement showing passes are long.
+- **`FOCUS_MARGIN` 1.25 → 1.6**, and the dwell timer stays rejected. Measured
+  off `/crop.jpg`: **3.5 focus switches/min before (median dwell 2.34 s), 0 in
+  120 s after** — on one scene, by a thumbnail-fingerprint heuristic that cannot
+  tell "fixed" from "now too sticky to move on purpose", which is the failure to
+  watch for. A timer was reconsidered on the operator's request and refused: any
+  hold **gated on candidacy** is powerless against a blink, since `focused()`
+  can only retain an incumbent still in the candidate list and that list is
+  stable tracks only. A hold that returned a non-candidate *would* work and is
+  worse — it aims the panel and TEACH at an object with no box and a stale crop.
+  **Be clear about what this does not fix:** the blink half of the churn
+  survives, and a bigger margin makes a returning object work harder to reclaim
+  its place. `DEAD_SECONDS` does not help here either — it preserves identity on
+  return, it does not stop the handoff. What softens it in practice is an
+  accident: `focused()` returns None on an empty candidate list without clearing
+  the incumbent, so an object that blinks while nothing else is teachable
+  resumes focus when it returns.
+- **Nomic loads outside the lock.** `models.warm_encoders(kind)` is called in
+  `_process` after `transcribe` and before `with self.lock:`. Both loaders are
+  `lru_cache`d, so it is the same work relocated. It matters because Nomic's
+  first load is ~4 s and paying it under the lock stalls the detect thread long
+  enough to trip `DEAD_SECONDS` — the app causing the flicker it is trying not
+  to have. `Robot.teach`'s signature is unchanged, deliberately.
+- **`#status` no longer toggles `display`.** It reserves a 38 px row always and
+  toggles `visibility`, so the button bar stops jumping under a waiting finger
+  on every action. `line-height` is pinned so the row cannot lose to a UA's font
+  metrics by a pixel, and `nowrap` keeps a long transcript from wrapping to two
+  lines and reintroducing the shift. A regression from the HTML panel commit.
+
+### Teach was never slower — the panel just started admitting it
+
+From the operator's own journal: **6 s steady, 10–11 s on the first teach of a
+process.** That is whisper-base on this board plus the one-time Nomic load, and
+it is what the numbers under "Measured baselines" already predict. Neither of
+the last two commits slowed it; `trim_to_speech` made it faster. What changed is
+that `da92caa` made "thinking..." *legible* — the same text used to be drawn
+~100 px wide into the video. "It used to not do that" is true of the sign, not
+the duration. Do not go looking for a regression here again; if the wait is the
+problem, the fix is the wording or the first-teach load, not transcription.
+
+### Two hazards found and deliberately left alone
+
+Both are real, both were reported to the operator, and neither is fixed:
+
+- **`is_person_like` blacklists a track id permanently.** `_person_tids` is
+  never cleared for the session, and `PERSON_WORDS` matches by word, so one
+  frame classified person-ish removes an object for the whole demo. Confirmed
+  live: a `person` box sits over the microphone at **0.77–0.91 conf on nearly
+  every frame** while the mic's own proposal flickers near the floor, and one
+  proposal in the scene comes back as `'baby bottle'` — `baby` is in the list,
+  so that object is permanently un-teachable. `hair dryer`, `head phones`,
+  `arm chair`, `eye glasses` go the same way. Needs a design decision (decay the
+  flag? require two consecutive hits?), not a one-liner.
+- **The lens has visible barrel distortion.** A crop's geometry therefore
+  depends on where in frame it sits, so an object taught near the centre and
+  seen near the edge is a different shape to CLIP — part of the score spread
+  above. It also biases `salience`, which already weights centrality.
+  Undistorting is `cv2.calibrateCamera` + one `initUndistortRectifyMap` and a
+  ~2–4 ms `remap` per frame, but it **invalidates every existing memory**, since
+  all of them were taught through the distorted lens, so it forces a re-teach
+  and a score-parity re-run. A deliberate project, not a flicker fix. Free
+  mitigation meanwhile: teach and demo near the centre of frame.
 
 ## Measured baselines on this board
 

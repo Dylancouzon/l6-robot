@@ -102,6 +102,25 @@ def transcribe(wav_path):
     return _asr_model().recognize(wav_path).strip()
 
 
+def warm_encoders(kind):
+    """Build the encoders one interaction needs, BEFORE the caller takes a lock.
+
+    Both loaders are lru_cached, so this is exactly the work the action would do
+    anyway — just not while holding the lock the detect thread needs. It matters
+    because Nomic takes ~4 s to load and only loads on the first teach or ask of
+    a session: paid inside the lock, that stalls tracking for four seconds,
+    which is long enough for DEAD_SECONDS to delete live tracks and is the one
+    way the app itself can cause the flicker it is trying not to have.
+
+    `kind` is the same "t"/"a" that already flows through the live app. Teach
+    never searches CLIP's text space, and this board budgets memory tightly
+    enough that loading an encoder it will not use is worth avoiding.
+    """
+    _text_model()            # teach stores a text vector; ask queries one
+    if kind == "a":
+        _clip_text()         # ask also searches the image space with CLIP text
+
+
 def warm_up(progress=lambda name: None):
     """Load the one encoder the camera loop uses on every frame.
 

@@ -37,7 +37,22 @@ MIN_AREA = 0.0008
 MAX_AREA = config.DETECT_MAX_AREA   # per-camera, see .env (--max-area)
 STABLE_FRAMES = 3
 REQUERY_SECONDS = 2.0
-DEAD_SECONDS = 1.5
+# How long a track survives with no detection before it is deleted outright.
+# Generous on purpose, and it is NOT the box's lifetime — see the `frames` decay
+# at the bottom of `process`, which hides the box after two missed passes
+# regardless. This only decides whether the object comes back as ITSELF.
+#
+# Measured on the live board: a real object's detector confidence swings either
+# side of DETECT_CONF (the microphone: 0.34-0.91, absent altogether on some
+# frames), so dropouts past a second are routine. At 1.5 s the Track was
+# destroyed, taking `label`, `note`, `thumb`, `vec` and `last_query` with it, and
+# the object returned as a stranger: no name for STABLE_FRAMES passes, then a
+# fresh embed and a fresh "seen" write. That is what the operator saw as a
+# recognized object "coming and going" on a static scene — and the shard counted
+# it, 57 Track births across 17 tracker ids in 25 minutes. BoT-SORT's own
+# track_buffer is 30 frames (~15 s of passes here), so 1.5 s was far stricter
+# than the tracker underneath it.
+DEAD_SECONDS = 5.0
 PAD = 0.12         # small margin; the mask removes the background anyway
 FILL = (124, 124, 124)
 
@@ -248,6 +263,9 @@ class Detector:
                     # and a reset hides an established box for STABLE_FRAMES
                     # more passes, which is most of the on-screen flicker.
                     # Two misses in a row still drop it (see the cap above).
+                    # This, not DEAD_SECONDS, is the box's lifetime — which is
+                    # why raising DEAD_SECONDS cannot widen the window in which
+                    # a departed object still carries a teachable stale crop.
                     t.frames = max(0, t.frames - 1)
 
         return [t for t in self.tracks.values() if t.stable]

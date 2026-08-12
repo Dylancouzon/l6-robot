@@ -129,8 +129,17 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
              background:var(--line) }
   .meta { font-size:12px; color:var(--violet) }
   #log { margin-top:18px; font-size:12px; color:var(--dim); line-height:1.7 }
-  #status { flex:0 0 auto; display:none; padding:9px 16px; background:var(--ink);
-            color:#fff; font-size:14px }
+  /* Reserve the row permanently and toggle visibility, never display. Toggling
+     display made the button bar jump ~37 px on every action and back again when
+     the message faded, which reads as a hitch on the one control the operator is
+     watching. line-height is pinned so the row's height is exactly 9+20+9=38 px
+     and cannot lose to a UA's font metrics by a pixel; nowrap keeps a long
+     transcript from wrapping to two lines and reintroducing the shift.
+     visibility:hidden hides the dark background too, so an empty row simply
+     reads as panel padding. */
+  #status { flex:0 0 auto; visibility:hidden; height:38px; padding:9px 16px;
+            background:var(--ink); color:#fff; font-size:14px; line-height:20px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
   #bar { flex:0 0 auto; display:grid; grid-template-columns:1fr 1fr; gap:8px;
          padding:10px; background:#e2e8ea;
          padding-bottom:calc(10px + env(safe-area-inset-bottom)) }
@@ -258,7 +267,9 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       shownSeq = s.status_seq;
     }
     const show = msg && (s.busy || Date.now() - statusAt < 6000);
-    $('status').style.display = show ? 'block' : 'none';
+    // visibility, not display: the row is always in the layout (see the CSS)
+    // so showing a message cannot move the buttons under a waiting finger.
+    $('status').style.visibility = show ? 'visible' : 'hidden';
     $('status').textContent = msg;
   }
 
@@ -852,6 +863,11 @@ class LiveApp:
             # Whisper takes seconds; run it before claiming the lock so the
             # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
+            # Same reasoning one step further: the encoders this action needs
+            # load lazily, and Nomic's first load is ~4 s. Build them out here
+            # rather than inside the lock, where they freeze the detect thread
+            # long enough to start killing tracks.
+            models.warm_encoders(kind)
             if kind == "t":
                 with self.lock:
                     taught = self.robot.teach(crop, q)

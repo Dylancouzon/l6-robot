@@ -23,7 +23,29 @@ def day_start_ts():
 # and forth several times a second — and you cannot reliably teach or forget a
 # target that only holds still for 100 ms. A challenger must be this much more
 # salient than the incumbent to take focus from it.
-FOCUS_MARGIN = 1.25
+#
+# Raised from 1.25 on an operator report that the box still traded between
+# unknowns in a cluttered scene. 1.25 was picked by eye and tolerated salience
+# swings up to 25%; on this camera a static object's box jitters more than that,
+# because salience is size x centrality and the detector's box for one object
+# changes size frame to frame. Baseline before the change, measured off
+# /crop.jpg: 3.5 focus switches per minute, median dwell 2.34 s.
+#
+# A dwell timer was considered again and NOT built. It stays rejected for the
+# reason recorded before — a second mechanism on one decision — plus one found
+# by reading the code: any hold **gated on candidacy** is powerless against a
+# blink, because `focused` can only retain an incumbent that is still in the
+# candidate list and that list holds stable tracks only. A hold that returned a
+# non-candidate would fix that half, and is a worse idea: it would point the
+# panel, and TEACH, at an object that currently has no box and a stale crop.
+#
+# So the blink half of the churn is NOT fixed here, and raising the margin
+# arguably makes it worse: a returning object must now beat whoever took its
+# place by 60%. What softens it in practice is an accident worth knowing about —
+# `focused` returns None on an empty candidate list *without* clearing the
+# incumbent, so an object that blinks while nothing else is teachable simply
+# resumes focus when it comes back.
+FOCUS_MARGIN = 1.6
 
 
 class Robot:
