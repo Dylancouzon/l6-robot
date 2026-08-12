@@ -3,57 +3,43 @@
 Durable handoff for the NVIDIA Jetson deployment. Update it when a test changes a
 conclusion or a milestone completes.
 
-**Status at 2026-08-12: solved and shipped.** The robot runs on the Jetson from a
-plain `uv` install. No container, no reflash, no source-built PyTorch.
+**Status at 2026-08-12: solved, shipped, and operator-confirmed.** The robot
+runs on the Jetson from a plain `uv` install — no container, no reflash, no
+source-built PyTorch — as a headless appliance on its own 5 GHz hotspot,
+driven from a phone. Nine rounds of work landed the same day; each has a
+section below with the measurements. The cold boot the earlier rounds flagged
+as unproven has since happened: the box booted at 13:13 into
+`multi-user.target` and the service was serving 14 seconds later. The operator
+teaches by phone, so the HTML panel and the voice path are confirmed in daily
+use.
 
-**Second issue, same day: recognition matched everything. Also solved** — the
-0.80 threshold was calibrated against a crop distribution the robot never
-produces. See "Recognition threshold" below.
+The nine rounds, newest last — each heading below carries the full story:
 
-**Third issue, same day: the UI stuttered on FORGET/TEACH and the UNKNOWN box
-hopped between objects.** Fixed in code and reviewed, **not yet confirmed on the
-device by the operator** — see "UI responsiveness" below for what to watch for
-and which two traps the review closed.
-
-**Fourth milestone, same day: the box became a headless appliance.** It serves
-its own Wi-Fi, starts the robot at boot, and needs no keyboard, screen, or venue
-network. Everything is installed and running on this machine and was verified
-live; the one thing **not** yet proven is a cold boot with the desktop gone,
-which needs a reboot the operator has to do. See "Headless appliance" below.
-
-**Fifth issue, same day: over the hotspot the feed ran slow and arrived 5+ s
-late.** Two causes, both fixed and both measured on this box: 60% of the bytes
-on the wire were the same frame sent again, and the hotspot was on 2.4 GHz.
-See "Streaming over the hotspot" below. Frame rate confirmed good by the
-operator afterwards.
-
-**Sixth issue, same day: teaching by voice returned nonsense labels and each
-action seemed to freeze for seconds.** Neither was headless and neither was the
-robot — measured, no action stalls the frame pump by more than 149 ms. Whisper
-was being handed the whole button hold, silence included, which both makes it
-hallucinate and costs 16 s. Fixed by trimming to the speech region and by
-keeping the browser mic open. See "The voice path" below. **Not yet confirmed by
-the operator**, and one limit is unfixed: whisper-base mishears bare single
-words, so the demo script should say "this is my laptop".
-
-**Seventh milestone, same day: the panel became HTML.** The UI was one
-composited JPEG — panel drawn with `cv2.putText` at a fixed 480 px and
-`hstack`ed onto the feed — which made "mobile responsive" structurally
-impossible. The stream now carries the annotated feed only and the page polls
-`/state`. **Verified on this box** (endpoints, memory, threads, an A/B on
-bandwidth); **not yet looked at by the operator on a phone.** See "The panel is
-HTML now" below.
-
-**Eighth issue, same day: recognized objects came and went on a static scene,
-and teach seemed to freeze.** Neither was the threshold and neither was new.
-The cause was `DEAD_SECONDS = 1.5` destroying a `Track` on a routine detector
-dropout, so the object returned as a stranger. **A move to 0.88 was measured on
-the live shard and refused** — it buys 2 recognitions and 5 mislabels, and the
-score series that looked like a knife-edge belonged to the mirror, an UNKNOWN
-that *should* not match. Fixed: `DEAD_SECONDS` 5.0, `FOCUS_MARGIN` 1.6, Nomic
-loading outside the lock, and the status row no longer shifting the layout. Two
-hazards found and left alone on purpose (a permanent person-blacklist, and lens
-distortion). See "Objects came and went on a static scene" below.
+1. **Startup memory** (not CUDA) made the view update every 15 s — lazy
+   encoder loading fixed it. See "The problem and the fix".
+2. **Recognition matched everything** — the 0.80 threshold was calibrated
+   against crops the robot never produces; now 0.90. See "Recognition
+   threshold".
+3. **UI stutter and a hopping UNKNOWN box** — work moved off the frame pump,
+   focus made sticky. See "UI responsiveness".
+4. **Headless appliance** — own Wi-Fi, boots into the demo. See "Headless
+   appliance".
+5. **Slow, lagging feed over the hotspot** — duplicate frames and 2.4 GHz,
+   both fixed and measured. See "Streaming over the hotspot".
+6. **Hallucinated labels, actions that read as freezes** — Whisper was handed
+   the whole button hold; now trimmed to speech. One limit unfixed:
+   whisper-base mishears bare single words, so say "this is my laptop". See
+   "The voice path".
+7. **The panel became HTML** — the old composited-JPEG panel could not fit a
+   phone. See "The panel is HTML now".
+8. **Objects came and went on a static scene** — `DEAD_SECONDS` was killing
+   tracks on routine dropouts. A threshold move to 0.88 was measured and
+   REFUSED; read that section before touching `RECOGNIZE_THRESHOLD`. See
+   "Objects came and went on a static scene".
+9. **Recognition-quality and teach-latency review** — labels lowercased,
+   model loads hidden under the button hold, multi-view teaching measured as
+   the big recognition win, swap re-enabled, live shard cleaned. See
+   "Recognition quality review" below.
 
 ## Goal and constraints
 
@@ -74,25 +60,13 @@ distortion). See "Objects came and went on a static scene" below.
 ## Repository state
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
-- PR #1 (`codex/enable-jetson-cuda`, the Jetson work) is **merged** into `main`.
-- PR #2 (the threshold calibration described under "Recognition threshold") is
-  **merged** into `main` as of 2026-08-12.
-- PR #3 (the responsiveness work under "UI responsiveness") is **merged** into
-  `main` as of 2026-08-12, as is the cert work under "Operational notes". Note
-  the code merged before the operator confirmed the feel on the device; that
-  confirmation is still outstanding.
-- PR #4 (the headless appliance described under "Headless appliance") is
-  **merged** into `main` as of 2026-08-12. As with #3, it merged before the
-  operator confirmed it on the device: **a cold boot with the desktop gone has
-  still not been proven.**
-- PRs #6 (streaming + voice) and #7 (the HTML panel) are **merged** into `main`
-  as of 2026-08-12. Both merged before the operator saw the panel on a phone;
-  that is still unconfirmed.
-- Branch: `codex/track-lifetime-and-focus`, one commit ahead of `main`: the work
-  under "Objects came and went on a static scene" — `DEAD_SECONDS`,
-  `FOCUS_MARGIN`, `warm_encoders`, and the status row. No new dependencies. It
-  also **refuses** a threshold move to 0.88 on measurement, which is the part to
-  read before anyone tries it again.
+- PRs #1–#7 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
+  headless appliance, streaming + voice, HTML panel) are all **merged** into
+  `main` as of 2026-08-12. Their rationale lives in the sections below.
+- Branch: `codex/track-lifetime-and-focus` (PR #8, open): the work under
+  "Objects came and went on a static scene" and "Recognition quality review".
+  No new dependencies. It also **refuses** a threshold move to 0.88 on
+  measurement, which is the part to read before anyone tries it again.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -134,8 +108,9 @@ The fix, all in `robot/models.py` plus one call-site change:
 | Threads | 78 | 18 (34 after an interaction) |
 | Swapped out at startup | 2.0 GB | 0 |
 
-Do not treat swap as the solution. The 8 GB swapfile can stay, but a correct
-configuration does not touch it.
+Do not treat swap as the solution: a correct configuration does not touch it.
+It IS the OOM backstop, though — the swapfile was later found deactivated
+entirely and was re-enabled; see "Recognition quality review".
 
 ## Recognition threshold — why it moved to 0.90
 
@@ -232,10 +207,10 @@ diagnose, in a repo whose rule is the smallest change that works.
 
 Two operator-visible symptoms, five causes: three behind the stutter, two behind
 the hopping box. All five were found by reading the threading in `robot/app.py`,
-not by profiling on the device; each is a structural cost that is obviously
-there once named, but **the operator has not yet confirmed the feel on the
-Jetson**. If a stutter remains, profile before changing anything else — the
-cheap explanations are now used up.
+not by profiling on the device. Since confirmed by measurement (see "The voice
+path": no action stalls the frame pump by more than 149 ms) and by daily use.
+If a stutter ever returns, profile before changing anything — the cheap
+explanations are used up.
 
 The operator-facing half of this is in the README under "Aiming It" (how to move
 a sticky focus) and "What to teach" (why you teach an object that is still in
@@ -502,7 +477,7 @@ stdout into a pipe, so `journalctl -u l6-robot -f` showed only torch's startup
 warning while every robot log line sat in a buffer — and on the abort above,
 that buffer was lost.
 
-### Verified live, and the one thing that is not
+### Verified live, cold boot included
 
 Verified on this box, service running as `qdrant` under systemd: page and
 `/cert.crt` return 200 over HTTPS on `https://10.42.0.1:8765`, the MJPEG stream
@@ -512,9 +487,10 @@ display. The AP is real (`iw dev`: `type AP`, channel 6, 20 MHz), with dnsmasq
 and a `nm-shared-wlP1p1s0` MASQUERADE rule, which is also why the hotspot
 carries internet whenever Ethernet is plugged in.
 
-**Not verified: a cold boot.** `set-default multi-user.target` takes effect on
-the next reboot, and nobody has rebooted since. If it comes up wrong, sshd is
-the way back in — over the hotspot, or Ethernet.
+**The cold boot has since been proven** (2026-08-12): the box booted at 13:13
+into `multi-user.target` with no desktop and the service was serving 14
+seconds later, per the boot journal. Nothing about this milestone remains
+unverified.
 
 ### Found by adversarial review of the diff — don't reintroduce these
 
@@ -817,12 +793,11 @@ expensive part. RSS/threads unmoved at 2.47 GB / 19 under sustained polling.
   dash in a CSS comment is a `SyntaxError`, not a rendering bug. There is a note
   above the literal.
 
-### Not verified
+### Since confirmed on a phone
 
-**Nobody has seen it on a phone.** Firefox is installed but headless screenshots
-do not run under snap confinement here, so the layout is checked by endpoint
-tests and by construction, not by eye. Judge the portrait split and whether the
-type reads across a room; `#label` is `clamp(20px,4.5vw,30px)`.
+The operator now drives the demo from a phone daily — teaches and asks go
+through the panel's hold-to-talk — so the layout works in practice. The knob if
+type ever reads too small across a room: `#label` is `clamp(20px,4.5vw,30px)`.
 
 ## Objects came and went on a static scene — and the bar was not the problem
 
@@ -955,8 +930,9 @@ it is what the numbers under "Measured baselines" already predict. Neither of
 the last two commits slowed it; `trim_to_speech` made it faster. What changed is
 that `da92caa` made "thinking..." *legible* — the same text used to be drawn
 ~100 px wide into the video. "It used to not do that" is true of the sign, not
-the duration. Do not go looking for a regression here again; if the wait is the
-problem, the fix is the wording or the first-teach load, not transcription.
+the duration. Do not go looking for a regression here again; the first-teach
+load has since been moved under the button hold (see "Recognition quality
+review"), and the steady 6 s is transcription's floor on this CPU.
 
 ### Two hazards found and deliberately left alone
 
@@ -981,6 +957,116 @@ Both are real, both were reported to the operator, and neither is fixed:
   and a score-parity re-run. A deliberate project, not a flicker fix. Free
   mitigation meanwhile: teach and demo near the centre of frame.
 
+## Recognition quality review — teach latency, labels, views, swap
+
+A full review pass (2026-08-12, ninth round) on "teaching still takes some time
+to register, recognition works okay but not great". Everything here was
+measured on the live box or the live shard before it was changed.
+
+### Teach latency: 6 s is the floor, and it is Whisper
+
+From the journal, release→"taught" is a flat 6 s whether the trimmed speech was
+2.2 s or 1.4 s. That is whisper-base on CPU plus ~0.3 s of embeds and the shard
+write. The GPU option was checked and closed: this venv's onnxruntime 1.27.0 is
+the CPU-only build (`get_available_providers()` = CPU/Azure), so GPU Whisper
+means sourcing a Jetson ORT-GPU wheel — heavy machinery against a pinned stack,
+for one demo beat. **Do not chase the 6 s.** Threads buy 0.5 s at best (already
+measured), and a smaller Whisper mishears more.
+
+What WAS cut: the first voice action of a session paid ~7 s of model loads
+(Whisper ~2.7 s + Nomic ~4 s, measured 7.1 s together) *after* the finger
+lifted. `on_listen` (the phone path) now starts `models.warm_encoders(kind)`
+on a daemon thread at pointerdown, so those loads run under the button hold.
+Trap that makes the lock necessary: **`lru_cache` does not serialize a cache
+miss**, so the pointerdown warm and `_process` calling the same loaders
+concurrently would build the same model twice — double the load time and a
+transient extra model's worth of RAM. Hence `_warm_lock` in `robot/models.py`,
+and `_process` calls `warm_encoders` BEFORE `transcribe` so a fast release
+waits on the lock instead of racing it. Verified: a second caller entering
+0.5 s into a warm finishes with the first, wall time unchanged (7.1 s), third
+call instant.
+
+**Be honest about what "under the hold" buys — the review measured it.** A
+cold ONNX model load holds the GIL in 1.4–1.6 s blocks, and every thread —
+frame pump, detect, `/state` — pauses with it. A ticker thread on a 20 ms
+cadence lost 75–89% of its wakeups during a cold `warm_encoders("t")`; a warm
+call costs nothing (0.1 ms). So the first press of a session freezes the feed
+for ~3 s in two blocks while "LISTENING" is up. **Relocated, not removed**:
+the identical stall previously ran after release behind "thinking...". Tracks
+survive because the hold is ~3 s against `DEAD_SECONDS = 5.0` — that margin
+is the load-bearing part, and it is not large. (The 149 ms max-gap number
+under "The voice path" is a warm-session figure; it never covered a cold
+start.)
+
+**The laptop path deliberately does NOT warm at press.** The first version
+did, and the adversarial review caught why it must not: `record_wav` re-enters
+`stream.read` every 100 ms on the same interpreter, a 1.6 s GIL hold overflows
+PortAudio's buffer, and `stream.read`'s overflow flag was being discarded —
+so the first laptop teach of a session would record chopped audio and fail
+like a Whisper hallucination, silently. The warm was removed there (the phone
+records on the phone, so the phone path has nothing to starve), and
+`record_wav` now prints a line when the overflow flag is set, so a starved
+recording can never again masquerade as a transcription bug.
+
+### Labels are lowercased at parse_label — the only door they enter through
+
+The live shard held the same laptop as `laptop` (4 taught views) and `Laptop`
+(2), and the same bottle as `Water bottle` and `water bottle`, because Whisper
+capitalizes on a whim. Labels are exact-match keys: `forget` deletes by string
+and recall dedupes by string, so each casing was a separate object — FORGET
+left the twin behind, recall listed both. `parse_label` now lowercases, which
+covers both mic paths at the single point every label passes through.
+
+Writes alone don't close it, though — the review called this out. A learner
+with a shard written before this change still holds `"Water bottle"`, and a
+re-teach now writes `"water bottle"`: FORGET would delete only the
+matching-case half and the box stays green, which reads as a broken delete.
+So the three read-side comparisons are case-folded too — `Memory.forget`,
+`_dedupe_by_label`, and the label-stripping loop in `Robot.forget` — which
+fixes old shards with no migration.
+
+The live shard was migrated the same day (service stopped, backup at
+`~/edge-data.bak-20260812`): 213 labels case-folded, and the mirror — 530 of
+976 points and the source of 26 of the 44 historical mislabels — forgotten
+outright. After: 446 points, five labels, all lowercase. Trap for next time:
+**`UpdateOperation.upsert_points` with an existing id does NOT rewrite the
+point** in this qdrant_edge build — it reports nothing and changes nothing.
+`UpdateOperation.set_payload(ids, payload)` is what works.
+
+### Multi-view teaching is the recognition fix, and it needs no code
+
+Scored on the live shard (938 sightings vs 14 taught views at the 0.90 bar):
+a label's misses are a coverage problem, not a threshold problem. The laptop's
+best single view covered 103 of its 173 sightings; the union of its 6 views
+covered **all 173**. The mouse: 135/150 for the best view, 150/150 for its 2.
+Re-teaching already adds views and recognition already takes the nearest, so
+the entire fix is the operator habit — **teach each object 2–3 times, turning
+it between teaches** — now in the README under "What to teach".
+
+The remaining mislabels (44/938) were dominated by the mirror (26, now
+forgotten) and by masked laptop *fragments* matching the mouse (17). No
+margin/vote/second-opinion mechanism was added for that residue: it is the
+same build-then-delete shape as the gates this file already buried, and the
+data fix (views + don't teach reflectives) is what actually moves the number.
+
+### Swap was off, and 4.2 GB RSS with no swap is an OOM waiting for a demo
+
+The 8 GB `/swapfile` existed but was active in no sense: not in `/proc/swaps`,
+not in fstab. Meanwhile the service sits at 4.2 GB RSS after a day of
+interactions with ~2 GB available. `Restart=always` turns an OOM kill into a
+30 s mid-demo restart. Re-enabled with `swapon /swapfile` plus an fstab line.
+The rule from round one stands — a correct configuration does not *use* swap —
+this is the backstop that turns a memory spike into slowness instead of a dead
+demo.
+
+### Open options, offered and deliberately not taken this round
+
+- **Person-blacklist decay** (`_person_tids` is forever; one person-ish frame
+  makes an object permanently unteachable — see "Two hazards" above).
+  Smallest sane fix: require two consecutive person-ish hits.
+- **`DETECT_CONF` 0.30 → 0.25** in `.env` against the visible blink — zero
+  code, revert if clutter grows.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -995,8 +1081,11 @@ Useful reference numbers; re-measure before trusting them after any change.
   audio costs 5.2 s, 7.7 s of audio costs **16.3 s**. Trimming silence is worth
   more than any thread tuning — see "The voice path".
 - Nomic load ~4 s, then ~0.15 s per embed. CLIP vision embed ~0.16 s.
-- Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask.
-  Add one thread for the key handler (see "UI responsiveness").
+- Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask;
+  drifts to ~4.2 GB over a day of interactions (shard, caches — not a leak
+  anyone has chased). Add one thread for the key handler (see "UI
+  responsiveness"). Swap is active again as the OOM backstop; steady-state
+  use of it should stay 0.
 - Same app as a systemd service, no desktop session: **2.3–2.5 GB / 19 threads**,
   i.e. no penalty for running headless. A clean `systemctl stop` takes 3–5 s, all
   of it the shard close. The desktop it replaces was holding ~1.5 GB.

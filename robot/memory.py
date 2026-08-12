@@ -45,14 +45,17 @@ def _dedupe_by_label(hits):
     """One entry per label — the nearest view wins (hits arrive score-sorted).
 
     Re-teaching an object stores extra views (see `teach`), so recall can
-    otherwise list the same label several times.
+    otherwise list the same label several times. Case-folded: new labels are
+    lowercased at parse time, but a shard written before that change can
+    still hold "Water bottle" next to "water bottle" — one object, not two.
     """
     seen, out = set(), []
     for h in hits:
         label = h.payload.get("label")
-        if label in seen:
+        key = label.lower() if label else label
+        if key in seen:
             continue
-        seen.add(label)
+        seen.add(key)
         out.append(h)
     return out
 
@@ -132,7 +135,12 @@ class Memory:
         # ponytail: full scan, fine at demo scale (tens–hundreds of points)
         records, _ = self.shard.scroll(
             ScrollRequest(limit=10000, with_payload=True))
-        ids = [p.id for p in records if p.payload.get("label") == label]
+        # case-folded so a shard written before labels were lowercased still
+        # forgets whole objects: "Water bottle" and "water bottle" are one
+        # thing, and deleting only the matching-case half leaves a green box
+        # that will not die — which reads as a broken FORGET
+        ids = [p.id for p in records
+               if (p.payload.get("label") or "").lower() == label.lower()]
         if ids:
             self.shard.update(UpdateOperation.delete_points(ids))
             self.shard.flush()

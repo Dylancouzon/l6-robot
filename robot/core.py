@@ -180,7 +180,9 @@ class Robot:
         """
         n = self.memory.forget(label)
         for t in self.detector.tracks.values():
-            if t.label == label:
+            # case-folded to match memory.forget: a pre-lowercase shard can
+            # have a track wearing the other casing of the same label
+            if t.label and t.label.lower() == label.lower():
                 t.label = t.note = t.thumb = None
                 t.requery_now()
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')

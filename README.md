@@ -159,6 +159,8 @@ Photos of distinct objects score lower than a live cluttered scene, so treat the
 
 Teach objects, not surfaces. A crop with little information in it — a blank panel, a reflective surface, a blurred fragment — sits near the middle of CLIP's space, close to everything, so it makes a memory that matches most of the room. That looks exactly like a broken threshold and isn't one. Fill more of the frame with the object and teach it again.
 
+**Teach each object two or three times, turning it between teaches.** One taught view is one point in CLIP's space, and the same object seen from another angle can land far from it — under the recognition bar, so the robot treats an object it knows as a stranger. Re-teaching adds views, and recognition matches against the nearest one; this is the same idea as adding documents to a search index, and it is the single biggest recognition improvement available. Measured on a live shard: a laptop's best single view covered 103 of its 173 later sightings, the union of its six views covered all 173.
+
 Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, `F` / **FORGET** it and teach again.
 
 ### What to say
