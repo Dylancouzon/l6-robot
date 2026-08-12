@@ -712,14 +712,19 @@ def main():
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--host", default="127.0.0.1",
                     help="0.0.0.0 serves the view on the network (phone/iPad)")
+    # These three are per-camera. Their persistent home is .env (see
+    # .env.example and robot/config.py); the flags override it for one run.
     ap.add_argument("--threshold", type=float, default=RECOGNIZE_THRESHOLD,
-                    help="recognition threshold (calibration knob; if it "
-                         "moves for the shoot, L5 moves with it)")
+                    help=f"recognition threshold (.env RECOGNIZE_THRESHOLD, "
+                         f"currently {RECOGNIZE_THRESHOLD}); calibrate with "
+                         f"testdata/verify_scores.py")
     ap.add_argument("--conf", type=float, default=None,
-                    help="detector confidence floor (raise to track less)")
+                    help="detector confidence floor, raise to track less "
+                         "(.env DETECT_CONF)")
     ap.add_argument("--max-area", type=float, default=None,
-                    help="biggest proposal kept, as a frame fraction "
-                         "(default 0.20 drops torso-sized boxes)")
+                    help="biggest proposal kept, as a frame fraction; the "
+                         "default drops torso-sized boxes (.env "
+                         "DETECT_MAX_AREA)")
     ap.add_argument("--location", default=None,
                     help='place stamped on memories this session, e.g. '
                          '"Hotel room", shown on recall so "where are my keys" '

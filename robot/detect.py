@@ -16,6 +16,8 @@ import time
 import cv2
 import numpy as np
 
+from robot import config
+
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")  # no pip calls at runtime
 
 try:
@@ -26,13 +28,13 @@ try:
 except ImportError:  # non-macOS: nothing to drain
     from contextlib import nullcontext as autorelease_pool
 
-CONF = 0.30        # calibration knob (--conf)
+CONF = config.DETECT_CONF   # per-camera, see .env (--conf overrides)
 IMGSZ = 640
 MAX_DET = 64
 # Normalized box-area band: drops speck noise AND oversized phantom/torso
 # regions. Demo objects are hand-held scale, so the cap stays tight.
 MIN_AREA = 0.0008
-MAX_AREA = 0.20    # calibration knob (--max-area)
+MAX_AREA = config.DETECT_MAX_AREA   # per-camera, see .env (--max-area)
 STABLE_FRAMES = 3
 REQUERY_SECONDS = 2.0
 DEAD_SECONDS = 1.5

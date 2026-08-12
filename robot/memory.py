@@ -1,11 +1,14 @@
 """The robot's memory: one Qdrant Edge shard, two named vectors.
 
 Same shape as the course's L5 assistant_shard — text 768 (Nomic), image 512
-(CLIP), cosine — and the same nearest-match-vs-0.80 recognition check.
+(CLIP), cosine — and the same nearest-match-vs-threshold recognition check.
+The threshold itself is per-camera and lives in .env; see RECOGNIZE_THRESHOLD.
 """
 import itertools
 import time
 from pathlib import Path
+
+from robot import config
 
 from qdrant_edge import (
     Distance,
@@ -23,9 +26,12 @@ from qdrant_edge import (
     UpdateOperation,
 )
 
-# Default matches L5. Calibratable (--threshold): demo quality wins; if live
-# calibration moves it, L5 gets edited to match so "same number" stays true.
-RECOGNIZE_THRESHOLD = 0.80
+# Per-camera, so it lives in .env (see robot/config.py) and is overridable
+# per-run with --threshold. L5 teaches 0.80 against clean studio crops; a live
+# camera's crops are smaller and softer, which lifts every score, so the
+# calibrated default here is higher. Re-run testdata/verify_scores.py after
+# any change to the encoders or the crop pipeline — it prints the knee.
+RECOGNIZE_THRESHOLD = config.RECOGNIZE_THRESHOLD
 
 CONFIG = EdgeConfig(
     vectors={

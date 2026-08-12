@@ -93,6 +93,12 @@ class Robot:
 
         Takes the transcript, not the WAV: speech-to-text is slow, so the
         caller runs it before claiming the live-state lock.
+
+        A crop with little information in it — a blank panel, a reflective
+        surface, a blurred fragment — makes a memory that matches most of the
+        room. Nothing here rejects one: a correctly calibrated threshold is
+        what keeps it harmless, so if it happens, calibrate (see
+        testdata/verify_scores.py) rather than filtering crops.
         """
         label = audio.parse_label(transcript)
         pid = self.memory.teach(

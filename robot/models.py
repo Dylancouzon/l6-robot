@@ -3,7 +3,8 @@
 Same models and the same FastEmbed and onnx-asr loaders as the course
 notebooks. The "same stack" claim in L6 depends on this file staying aligned
 with the course's helper.py, and on the pinned versions in pyproject.toml:
-the 0.80 recognition threshold is calibrated against those exact encoders.
+the recognition threshold is calibrated against those exact encoders (and
+against the crop pipeline — see testdata/verify_scores.py).
 
 Each loader is cached, so a model is built once and only when something first
 asks for it. That laziness is what lets an 8 GB Jetson run this: see warm_up.

@@ -34,7 +34,7 @@ The two new stages stay black boxes on purpose. A detector finds *a thing*; the 
 - **Vectors:** `text` 768-dim Nomic v1.5 and `image` 512-dim CLIP ViT-B/32, both through FastEmbed
 - **Speech:** Whisper-base through `onnx-asr`
 - **Detection:** YOLOE prompt-free
-- **Recognition rule:** nearest taught view must meet `RECOGNIZE_THRESHOLD = 0.80`
+- **Recognition rule:** nearest taught view must meet `RECOGNIZE_THRESHOLD` (default `0.90`, per-camera — see [Calibrating For Your Camera](#calibrating-for-your-camera))
 
 Detector labels are only used to crop objects. The memory layer decides what an object is.
 
@@ -44,10 +44,13 @@ YOLO weights download automatically through Ultralytics. You can also place `yol
 
 ```bash
 uv sync
+cp .env.example .env
 uv run python -m robot.app
 ```
 
 The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo).
+
+The defaults in `.env` are tuned for one specific camera. Read [Calibrating For Your Camera](#calibrating-for-your-camera) before you conclude that recognition is broken — the single most common symptom, everything in the room matching the last thing you taught, is a threshold that hasn't been calibrated.
 
 ### Running On A Jetson Orin Nano
 
@@ -91,15 +94,50 @@ Every recognized object is drawn on screen. Only the most prominent unknown obje
 
 ### Flags
 
+The first three are per-camera settings whose permanent home is `.env`; the flags override it for a single run, which is what you want while calibrating.
+
 | Flag | What it does |
 |---|---|
-| `--threshold 0.80` | Recognition bar: the nearest taught view must score at least this to count as a match. Raise it if similar objects get confused; lower it if a taught object stops matching from new angles. |
-| `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. |
-| `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. |
+| `--threshold 0.90` | Recognition bar: the nearest taught view must score at least this to count as a match. `.env` `RECOGNIZE_THRESHOLD`. See [Calibrating For Your Camera](#calibrating-for-your-camera). |
+| `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. `.env` `DETECT_CONF`. |
+| `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. `.env` `DETECT_MAX_AREA`. |
 | `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). |
 | `--reset` | Wipe all memories before starting, for a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
 | `--camera 1` | Use a different webcam. |
 | `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
+
+## Calibrating For Your Camera
+
+**Symptom:** you teach the robot one object and half the room starts matching it, at scores just over the bar, while the real object sits higher. Nothing is broken. The threshold is a per-camera number and the default is not yours.
+
+CLIP cosine similarity does not run from 0 to 1 in practice. Two *unrelated* crops from the same camera routinely score 0.75 to 0.85, because they share lighting, sensor, background, and scale. `0.90` is not "90% confident" — it is a point above that floor. Move the camera further from the desk and every crop gets smaller and softer, the floor rises, and a threshold that worked at arm's length starts matching the furniture.
+
+Copy the example file and calibrate:
+
+```bash
+cp .env.example .env
+uv run python testdata/verify_scores.py
+```
+
+The script crops through the same code path the live robot uses and prints three things:
+
+- **Per-pair scores**, split into same-object and different-object.
+- **The margin**, worst same-object score minus best different-object score. If this is negative, no threshold works and the crops are the problem — get closer, add light, fill more of the frame.
+- **A threshold sweep**, showing how many true matches survive and how many false ones creep in at each candidate.
+
+Put the middle of the clean range into `.env` as `RECOGNIZE_THRESHOLD`.
+
+To calibrate against your own scene rather than the bundled photos, take three photos of each of two or three objects with the camera you'll demo with, name them `<object>_<n>.jpg`, and point the script at them:
+
+```bash
+uv run python testdata/verify_scores.py --source ~/my-photos
+```
+
+Photos of distinct objects score lower than a live cluttered scene, so treat the script's answer as a floor and expect to raise it a little against the real thing.
+
+### What to teach
+
+Teach objects, not surfaces. A crop with little information in it — a blank panel, a reflective surface, a blurred fragment — sits near the middle of CLIP's space, close to everything, so it makes a memory that matches most of the room. That looks exactly like a broken threshold and isn't one. Fill more of the frame with the object and teach it again.
 
 ## Phone Or Tablet Demo
 
@@ -137,7 +175,8 @@ uv run python -c "import sounddevice; print(sounddevice.query_devices())"
 | `robot/detect.py` | YOLOE detection, tracking, and cadence gating |
 | `robot/memory.py` | Qdrant Edge teach, recognize, and day-recall logic |
 | `robot/models.py` | Embedding and speech model setup |
-| `testdata/` | Replay fixtures: images and WAVs |
+| `robot/config.py` | Per-camera settings, read from `.env` |
+| `testdata/` | Replay fixtures, plus `verify_scores.py` for calibration |
 
 Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.
 
