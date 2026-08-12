@@ -9,7 +9,9 @@ against the crop pipeline — see testdata/verify_scores.py).
 Each loader is cached, so a model is built once and only when something first
 asks for it. That laziness is what lets an 8 GB Jetson run this: see warm_up.
 """
+import os
 from functools import lru_cache
+from pathlib import Path
 
 NOMIC_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 NOMIC_DIM = 768
@@ -25,6 +27,15 @@ WHISPER_MODEL = "whisper-base"
 # half a second per utterance.
 ENCODER_THREADS = 2
 
+# FastEmbed caches its ONNX files in /tmp by default, and /tmp is swept: on the
+# Jetson, systemd-tmpfiles prunes it at 30 days. That is 1.1 GB of encoders the
+# headless robot cannot fetch again, because on its own hotspot it has no
+# internet — it would boot into a download that never finishes. Keep the cache
+# somewhere durable instead. FASTEMBED_CACHE_PATH still wins if it is set;
+# that is FastEmbed's own override, and it names the directory outright.
+CACHE_DIR = (os.environ.get("FASTEMBED_CACHE_PATH")
+             or str(Path.home() / ".cache" / "fastembed"))
+
 
 def _sess_options():
     """ONNX Runtime's documented threading controls, for onnx-asr."""
@@ -39,19 +50,22 @@ def _sess_options():
 @lru_cache(maxsize=1)
 def _text_model():
     from fastembed import TextEmbedding
-    return TextEmbedding(NOMIC_MODEL, threads=ENCODER_THREADS)
+    return TextEmbedding(NOMIC_MODEL, threads=ENCODER_THREADS,
+                         cache_dir=CACHE_DIR)
 
 
 @lru_cache(maxsize=1)
 def _clip_vision():
     from fastembed import ImageEmbedding
-    return ImageEmbedding(CLIP_VISION_MODEL, threads=ENCODER_THREADS)
+    return ImageEmbedding(CLIP_VISION_MODEL, threads=ENCODER_THREADS,
+                          cache_dir=CACHE_DIR)
 
 
 @lru_cache(maxsize=1)
 def _clip_text():
     from fastembed import TextEmbedding
-    return TextEmbedding(CLIP_TEXT_MODEL, threads=ENCODER_THREADS)
+    return TextEmbedding(CLIP_TEXT_MODEL, threads=ENCODER_THREADS,
+                         cache_dir=CACHE_DIR)
 
 
 @lru_cache(maxsize=1)

@@ -1,0 +1,41 @@
+[Unit]
+Description=L6 robot memory demo (camera, detector, browser view)
+Documentation=https://github.com/Dylancouzon/l6-robot
+# NetworkManager owns the robot's hotspot. Nothing here waits for an address:
+# the view binds 0.0.0.0 and the certificate is named from --advertise, so the
+# robot starts and serves whether or not the radio is up yet.
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+# No start-rate limit. A missing or wedged camera is supposed to end in a
+# restart, forever, until someone plugs the camera back in — and loading the
+# detector takes ~40 s, so a genuine crash loop is slow anyway.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=qdrant
+WorkingDirectory=/home/qdrant/Documents/github/l6-robot
+# uv is a user install, and Ultralytics/FastEmbed/HF all cache under $HOME.
+Environment=HOME=/home/qdrant
+Environment=PATH=/home/qdrant/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Python block-buffers stdout when it is a pipe rather than a terminal, so
+# without this the robot's own log lines sit in a buffer and `journalctl -u
+# l6-robot -f` shows nothing but torch's startup warning.
+Environment=PYTHONUNBUFFERED=1
+# --host 0.0.0.0: also reachable over Ethernet, which is the maintenance path.
+# --advertise: name the hotspot's own fixed address in the URL and the
+#   certificate. A DHCP lease would change and force every phone to re-accept
+#   the certificate; 10.42.0.1 never changes, so trusting it once is forever.
+# --watchdog: a USB camera that wedges inside a driver call cannot be noticed
+#   by the thread that is stuck in it. Exit and let Restart= fix it.
+ExecStart=/home/qdrant/.local/bin/uv run --no-sync python -m robot.app \
+          --host 0.0.0.0 --advertise 10.42.0.1 --watchdog 30
+# The clean shutdown — flush and close the shard under the lock — hangs off
+# KeyboardInterrupt. systemd's default SIGTERM would kill the process mid-write.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

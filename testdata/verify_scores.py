@@ -41,7 +41,7 @@ from ultralytics import YOLO
 
 from robot.config import RECOGNIZE_THRESHOLD
 from robot.detect import CONF, IMGSZ, padded_crop
-from robot.models import CLIP_VISION_MODEL, ENCODER_THREADS
+from robot.models import CACHE_DIR, CLIP_VISION_MODEL, ENCODER_THREADS
 
 TESTDATA = Path(__file__).parent
 SWEEP = [0.75, 0.80, 0.85, 0.88, 0.90, 0.92, 0.95]
@@ -86,7 +86,10 @@ def main():
         raise SystemExit(f"need at least 2 images in {source}")
 
     model = YOLO("yoloe-11l-seg-pf.pt")
-    embedder = ImageEmbedding(CLIP_VISION_MODEL, threads=ENCODER_THREADS)
+    # cache_dir, like the app: without it FastEmbed re-downloads 336 MB into
+    # /tmp, which is both slow and a copy that /tmp's cleaner will delete.
+    embedder = ImageEmbedding(CLIP_VISION_MODEL, threads=ENCODER_THREADS,
+                              cache_dir=CACHE_DIR)
 
     crops, kept = {}, []
     for p in paths:

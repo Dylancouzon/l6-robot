@@ -15,10 +15,16 @@ touch buttons (phone/iPad):
 Quit with Ctrl-C in the terminal (no on-screen quit — a stray tap would end
 the demo). On a phone the mic is the phone's own (hold-to-talk, uploaded as a WAV);
 --host non-loopback serves HTTPS so the browser will grant mic access.
+
+In its case the robot runs this as a service on its own Wi-Fi, with no keyboard
+or screen at all: see deploy/ and the README section "Headless Appliance".
 """
 import argparse
+import ipaddress
+import os
 import queue
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -485,8 +491,9 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 class LiveApp:
-    def __init__(self, robot, camera=0):
+    def __init__(self, robot, camera=0, watchdog=0.0):
         self.robot = robot
+        self.watchdog = watchdog    # seconds without a frame before exiting
         self.cap = cv2.VideoCapture(camera)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -504,6 +511,7 @@ class LiveApp:
         self.pending_crop = None   # crop stashed when a teach starts
         self.pending_track = None  # ...and the track it came from
         self.stop = threading.Event()
+        self.frame_at = None       # monotonic stamp of the last frame (_watchdog)
 
     def _detect_loop(self):
         last = 0.0
@@ -619,12 +627,17 @@ class LiveApp:
                          daemon=True).start()
         return 202
 
-    def run(self, host="127.0.0.1"):
+    def run(self, host="127.0.0.1", advertise=None):
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
         StreamHandler.app = self
         server = ThreadingHTTPServer((host, PORT), StreamHandler)
+        # `host` says where to listen; the URL and the certificate need one real
+        # address to name. Normally we look up whichever one the LAN gave us,
+        # but the headless robot passes --advertise: it serves its own hotspot
+        # at a fixed address, and naming that address (rather than a DHCP lease)
+        # is what lets a phone trust the cert once and never be asked again.
         loopback = host in ("127.0.0.1", "localhost")
-        addr = host if loopback else _lan_ip()
+        addr = advertise or (host if loopback else _lan_ip())
         scheme = "http"
         if not loopback:  # phone mic needs HTTPS (a secure context)
             try:
@@ -658,24 +671,35 @@ class LiveApp:
             if ok:
                 self.jpeg = buf.tobytes()
 
-        splash("warming up...")
-        if loopback:
-            webbrowser.open(url)  # no browser on the headless robot
-        models.warm_up(lambda name: splash(f"loading {name}..."))
-        splash("loading YOLOE detector...")
-        self.robot.detector.warm()
-        self._drain_keys()  # ignore keys pressed before the feed was live
-        threading.Thread(target=self._detect_loop, daemon=True).start()
-        threading.Thread(target=self._key_loop, daemon=True).start()
         try:
+            splash("warming up...")
+            if loopback:
+                webbrowser.open(url)  # no browser on the headless robot
+            models.warm_up(lambda name: splash(f"loading {name}..."))
+            splash("loading YOLOE detector...")
+            self.robot.detector.warm()
+            self._drain_keys()  # ignore keys pressed before the feed was live
+            threading.Thread(target=self._detect_loop, daemon=True).start()
+            threading.Thread(target=self._key_loop, daemon=True).start()
+            if self.watchdog:
+                threading.Thread(target=self._watchdog, args=(self.watchdog,),
+                                 daemon=True).start()
             self._loop()
         except KeyboardInterrupt:
             pass  # Ctrl-C is the quit path; fall through to a clean shutdown
-        self.stop.set()
-        server.shutdown()
-        self.cap.release()
-        with self.lock:  # let an in-flight FORGET/REBOOT/teach finish first —
-            self.robot.close()  # closing the shard under a write can corrupt it
+        finally:
+            # From here on the interrupt has been heard, and a *second* one must
+            # not land in the middle of this: it skips the shard close and the
+            # process aborts in a native destructor instead. Two arrive as a
+            # matter of course — a service manager signals every process in the
+            # cgroup, so `uv` forwards one and the kernel delivers another — and
+            # a human holding Ctrl-C does the same.
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            self.stop.set()
+            server.shutdown()
+            self.cap.release()
+            with self.lock:  # let an in-flight FORGET/REBOOT/teach finish —
+                self.robot.close()  # closing under a write can corrupt the shard
 
     def _loop(self):
         """Main thread: pull frames and compose the view, nothing else.
@@ -689,8 +713,40 @@ class LiveApp:
             ok, frame = self.cap.read()
             if not ok:
                 break
+            self.frame_at = time.monotonic()  # for _watchdog; see why monotonic
             self.latest = frame
             self._render(frame, list(self.tracks), self.robot.attention)
+
+    def _watchdog(self, stall):
+        """Insurance for a robot nobody can see: if frames stop arriving, die
+        so the service manager restarts us.
+
+        A camera that fails cleanly already ends `_loop` — `cap.read()` returns
+        False. This is for the other case, a USB device that wedges *inside*
+        the driver call and never returns, which the frame pump cannot notice
+        because it is the thread that is stuck. Off unless --watchdog asks for
+        it, because on a laptop a lid-close looks exactly like a stall.
+
+        Arm the clock here rather than waiting for a first frame to stamp it.
+        A camera that wedges on its *very first* read is the likeliest wedge of
+        all — it is what a power-cut USB device does — and waiting for a frame
+        before arming would leave exactly that case invisible forever.
+
+        The clock is monotonic on purpose. The operator is told to set the
+        appliance's date by hand (README, "The Clock"), and a wall clock that
+        jumps a day forward would read as a stall and kill a healthy robot.
+        """
+        self.frame_at = time.monotonic()
+        # wait, not sleep: stop.set() ends this thread within 2 s, so a
+        # shutdown in progress can't be shot from under itself
+        while not self.stop.wait(2):
+            if time.monotonic() - self.frame_at > stall:
+                print(f"no camera frame for {stall:.0f}s — exiting so the "
+                      "service restarts", flush=True)
+                # _exit, not a clean shutdown: the pump is blocked in a driver
+                # call and self.lock may never come free. Safe because every
+                # memory write is already flushed to disk (Memory._upsert).
+                os._exit(1)
 
     def _key_loop(self):
         """Key presses and touch buttons, off the frame pump. One thread, so
@@ -789,6 +845,22 @@ def replay(robot, source):
     robot.close()
 
 
+def _ip_arg(text):
+    """--advertise, checked here rather than by openssl.
+
+    `_ensure_cert` writes the value as an `IP:` subjectAltName, and a hostname
+    in that field makes openssl reject the whole certificate. That lands in the
+    HTTPS fallback and quietly serves plain http, which takes the phone mic away
+    with one line of warning — a bad way to find out about a typo.
+    """
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not an IP address. The certificate needs an IP here; "
+            "for the robot's own hotspot that is 10.42.0.1.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source", help="image dir or video file (headless)")
@@ -800,6 +872,16 @@ def main():
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--host", default="127.0.0.1",
                     help="0.0.0.0 serves the view on the network (phone/iPad)")
+    ap.add_argument("--advertise", default=None, metavar="ADDR", type=_ip_arg,
+                    help="IP address to put in the URL and the certificate, "
+                         "when it isn't the one to look up (the headless "
+                         "robot's own hotspot: a fixed address the phone can "
+                         "trust for good)")
+    ap.add_argument("--watchdog", type=float, default=0.0, metavar="SECONDS",
+                    help="exit if the camera delivers no frame for this long, "
+                         "so a service manager can restart the robot; 0 is off "
+                         "(unattended runs only — a laptop lid-close looks "
+                         "like a stall)")
     # These three are per-camera. Their persistent home is .env (see
     # .env.example and robot/config.py); the flags override it for one run.
     ap.add_argument("--threshold", type=float, default=RECOGNIZE_THRESHOLD,
@@ -829,7 +911,8 @@ def main():
     if args.source:
         replay(robot, args.source)
     else:
-        LiveApp(robot, args.camera).run(args.host)
+        LiveApp(robot, args.camera, watchdog=args.watchdog).run(
+            args.host, advertise=args.advertise)
 
 
 if __name__ == "__main__":
