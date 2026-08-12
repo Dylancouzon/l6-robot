@@ -92,6 +92,14 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
 
 Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
+### Aiming It
+
+`TEACH` acts on the most prominent **unknown** object; `FORGET` acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame.
+
+Focus is deliberately **sticky**: once an object holds the thick box, it keeps it until something is clearly more prominent — roughly 25% more — or until it leaves the frame. Without that, two objects of similar size and position trade the box several times a second, and you end up teaching whichever one happened to win on the frame you pressed. If focus won't leave an object, move the one you want closer or more central, or press `Q` / **IGNORE** to dismiss the current unknown outright.
+
+To trade a twitchier box for an easier-to-move one, `FOCUS_MARGIN` in `robot/core.py` is the single number: lower is more responsive and more jittery, higher is calmer and more stubborn.
+
 ### Flags
 
 The first three are per-camera settings whose permanent home is `.env`; the flags override it for a single run, which is what you want while calibrating.
@@ -139,6 +147,8 @@ Photos of distinct objects score lower than a live cluttered scene, so treat the
 
 Teach objects, not surfaces. A crop with little information in it — a blank panel, a reflective surface, a blurred fragment — sits near the middle of CLIP's space, close to everything, so it makes a memory that matches most of the room. That looks exactly like a broken threshold and isn't one. Fill more of the frame with the object and teach it again.
 
+Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, `F` / **FORGET** it and teach again.
+
 ## Phone Or Tablet Demo
 
 Run the app on the robot or laptop with:
@@ -147,7 +157,23 @@ Run the app on the robot or laptop with:
 uv run python -m robot.app --host 0.0.0.0
 ```
 
-The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the self-signed certificate once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the certificate warning once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+
+### Why HTTPS, And Why The Warning
+
+Browsers only hand out the microphone in a **secure context**. `http://localhost` counts as one, but `http://192.168.x.x` does not — so the moment the interface moves to your phone, the app has to serve HTTPS. It generates a self-signed certificate into `cert/` on first run.
+
+The warning appears because nothing vouches for that certificate. It is not a misconfiguration and it cannot be coded away: a public certificate authority will not sign a certificate for a private LAN address, and reaching one would need internet access this demo is designed not to need. Accepting it once per device is the normal path, and the mic works fine afterwards.
+
+**To get rid of the warning on your own demo phone** — worth doing before filming — install the certificate as trusted, once:
+
+1. Open `https://<lan-ip>:8765/cert.crt` on the phone and accept the warning one last time to download it.
+2. **iOS/iPadOS:** Settings → General → VPN & Device Management → install the downloaded profile. Then, and this step is easy to miss, Settings → General → About → **Certificate Trust Settings** → enable full trust for `l6-robot`.
+3. **Android:** Settings → Security → Encryption & credentials → Install a certificate → **CA certificate** → pick the downloaded file.
+
+Reload the page and the warning is gone for good on that device.
+
+The certificate names the IP address it was generated for, so it is regenerated automatically whenever the robot's address changes — which means a phone you trusted on your home Wi-Fi will warn again on the booth network, or after switching to hotspot mode. Trust it once per address you demo on. Certificates are valid for 397 days; Safari rejects anything much longer, trusted or not.
 
 This works offline in either setup:
 

@@ -10,6 +10,11 @@ plain `uv` install. No container, no reflash, no source-built PyTorch.
 0.80 threshold was calibrated against a crop distribution the robot never
 produces. See "Recognition threshold" below.
 
+**Third issue, same day: the UI stuttered on FORGET/TEACH and the UNKNOWN box
+hopped between objects.** Fixed in code and reviewed, **not yet confirmed on the
+device by the operator** — see "UI responsiveness" below for what to watch for
+and which two traps the review closed.
+
 ## Goal and constraints
 
 - Target: Jetson Orin Nano Super 8 GB, Ubuntu 24.04/aarch64, Jetson Linux R39.2 /
@@ -30,8 +35,13 @@ produces. See "Recognition threshold" below.
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
 - PR #1 (`codex/enable-jetson-cuda`, the Jetson work) is **merged** into `main`.
-- Branch: `codex/calibrate-recognition-threshold`, holding the threshold
-  calibration work described under "Recognition threshold".
+- PR #2 (the threshold calibration described under "Recognition threshold") is
+  **merged** into `main` as of 2026-08-12.
+- Branch: `codex/calibrate-recognition-threshold`, reused after that merge and
+  now one commit ahead of `main`: the responsiveness work described under "UI
+  responsiveness", open as **PR #3**. It touches `robot/app.py`,
+  `robot/core.py`, `robot/detect.py`, the README and this file; it adds no
+  files and no dependencies.
 - `robot.log` is untracked runtime output and is now covered by `*.log` in
   `.gitignore`. `.env` is gitignored too; `.env.example` is tracked and is the
   documentation for every per-camera knob.
@@ -154,6 +164,144 @@ degenerate *relative to the operating threshold*. Calibrate the threshold; do
 not filter crops. A refusal path also costs a failure mode a learner cannot
 diagnose, in a repo whose rule is the smallest change that works.
 
+## UI responsiveness — stutter on the buttons, and a hopping UNKNOWN box
+
+Two operator-visible symptoms, five causes: three behind the stutter, two behind
+the hopping box. All five were found by reading the threading in `robot/app.py`,
+not by profiling on the device; each is a structural cost that is obviously
+there once named, but **the operator has not yet confirmed the feel on the
+Jetson**. If a stutter remains, profile before changing anything else — the
+cheap explanations are now used up.
+
+The operator-facing half of this is in the README under "Aiming It" (how to move
+a sticky focus) and "What to teach" (why you teach an object that is still in
+frame). Keep those two in sync with the constants here.
+
+Nothing here touches the crop pipeline, the encoders or the threshold. Score
+parity re-run anyway and is byte-identical: same-object min 0.887 / med 0.920,
+different med 0.472 / max 0.611, margin +0.275.
+
+Headless replay over `testdata/` also prints the same verdicts as before, but
+**do not read that as proof of no behaviour change**: those seven images hold
+one object each, so they never exercise the focus stickiness below, and each
+image gets its own `detector.reset()`. The replay test covers the crop and
+recognition path, not the attention path. The attention path is covered by
+reasoning and by throwaway stub tests, not by anything in the repo.
+
+### Symptom 1: the feed stalls when you press FORGET or REBOOT
+
+Three separate costs were sitting on the frame-pump thread, the one thread that
+must never block — it does `cap.read()` (103 ms), composes the view and encodes
+the JPEG the browser is streaming.
+
+1. **Key handling ran inline in `_loop`.** `FORGET` scrolls up to 10 000 points
+   with payloads, deletes, and `flush()`es; `REBOOT` closes and reloads the
+   shard. Both also take `self.lock`, which the detect thread holds for an
+   entire YOLO pass plus one CLIP embed per due track — so the wait alone could
+   exceed half a second before the shard work even started. Now `_key_loop` /
+   `_handle_key` run on their own thread; `_loop` only captures and renders, and
+   takes no lock at all. One key thread, deliberately, so two taps on the same
+   button run in order. Note this serializes the **key queue only** — phone
+   hold-to-talk arrives on HTTP handler threads (`/listen`, `/audio`) and is
+   still gated only by the non-atomic `self.busy` check-and-set, so a FORGET tap
+   and a phone TEACH can still overlap. Pre-existing, and the shard writes are
+   serialized by `self.lock` regardless.
+2. **Teach and forget marked *every* track `last_query = 0`**, so the next
+   detect pass fired a CLIP embed (~0.16 s) for each of N tracks in a single
+   locked burst. Now each path requeries only what it must: teach stamps the one
+   track it taught (stashed as `pending_track` when the crop is grabbed, beside
+   the existing `pending_crop`), and forget stamps only the tracks wearing the
+   deleted label. One embed instead of N.
+3. **The panel re-read thumbnails off disk every rendered frame** — up to three
+   `cv2.imread` calls at 10 fps. Now `_thumb_img`, an `lru_cache(32)`. Thumbs
+   are write-once, so it cannot go stale (`Robot._thumb` stamps filenames with
+   `time_ns`; `forget` deletes points, not files). Bounded on purpose: memory is
+   the scarce resource on this board.
+
+Also: `Track.requery_now()` sets `last_query = now - REQUERY_SECONDS` instead of
+`0`. Zeroing it makes `last_query` falsy, which blanks the panel to "looking..."
+for a beat right after a successful teach and reads as a glitch. And the
+label-stripping on forget lives **inside `Robot.forget()`**, not in the app: it
+is part of what forgetting an object means, and putting it there also catches
+tracks that are momentarily off-screen and would otherwise keep a deleted name
+for a couple of seconds. The box turns red on the press.
+
+### Symptom 2: the UNKNOWN box jumps between objects, so you teach the wrong one
+
+`Robot.focused()` was a stateless `max(t.salience)`, and salience is recomputed
+every frame from box geometry. Two objects of similar size and centrality
+therefore traded the box several times a second, and only one unknown is ever
+displayed or teachable — so the teach target could change between deciding to
+press and pressing.
+
+- `focused()` is now sticky with `FOCUS_MARGIN = 1.25` in `robot/core.py`: the
+  incumbent keeps focus until a challenger is 25% more salient or its track
+  leaves the candidate list. It is an instance method now, holding
+  `self._incumbent` — **keyed by the `Track` object, not by `tid`**. See the
+  trap below; do not "simplify" it back to ids.
+- **Both decisions are now made once per detect pass, inside
+  `Robot.process_frame`**, and published as `Robot.attention` (the panel
+  subject and FORGET target) and `Robot.teachable` (the salient unknown, the
+  TEACH target). The app reads them. Previously the frame pump re-derived both
+  every rendered frame, which meant the render thread was mutating the
+  incumbency map with no lock while the detect thread mutated it too. Now there
+  is a single writer, on the thread that owns track state, and only two pools
+  ("view" and "unknown") instead of a third that never had more than one
+  candidate.
+- `Track.frames` now **decays** on a missed detection (`max(0, frames - 1)`,
+  capped at `STABLE_FRAMES + 1` on the way up) instead of resetting to 0. A
+  reset hid an established box for three more detect passes on a single
+  detector blink, which was most of the visible flicker. Death is still
+  time-based via `DEAD_SECONDS`.
+
+The cap is deliberately one frame above the gate, not more. Every frame of
+credit is a frame in which an object that has *left* still has a box and a
+**stale crop** — and is still teachable. Whip an object out of frame and tap T
+inside that window and you teach a picture of where it used to be, which is the
+blank-crop poisoning described under "Recognition threshold". One blink of
+tolerance buys the flicker fix; three would widen that window for nothing.
+
+If the box still feels twitchy, `FOCUS_MARGIN` is the one number to turn up.
+1.25 was picked by eye as a value comfortably above frame-to-frame jitter and
+comfortably below a deliberate move; it was **not** measured against live
+footage. Raising it makes focus harder to move on purpose, which is its own
+failure.
+
+### Two traps found in review, both closed — don't reopen them
+
+Both were caught by an adversarial review of the diff, not by testing, and
+neither would have shown up on the bench quickly.
+
+- **Never key attention state by `tid`.** `Detector.reset()` calls the
+  ultralytics tracker's `reset()`, which calls `reset_id()` and restarts track
+  ids from 1 (`ultralytics/trackers/byte_tracker.py`). A tid-keyed incumbent
+  therefore survives the reset and hands its focus to whatever *new,
+  unrelated* track inherits its number — verified: a 0.50-salience newcomer
+  held focus over a 0.60 one purely by inheriting an id. It bit `replay()` (a
+  reset per image) and the live REBOOT beat. Holding the `Track` object makes
+  the whole class impossible: a dead object simply isn't in the candidate list.
+- **`robot.close()` must hold `self.lock`.** Once FORGET/REBOOT moved off the
+  main thread, Ctrl-C during an in-flight forget could close the Edge shard
+  from under a scroll/delete/reopen. Previously impossible, because those ran
+  on the very thread that then did the shutdown. Shutdown now takes the lock.
+
+### Rejected here
+
+- **A dwell timer on focus** (challenger must lead for N ms) on top of the
+  margin. The margin alone covers the jitter, and a second mechanism doing the
+  same job costs a learner more than it buys.
+- **Debouncing the buttons.** The stutter was the work on the wrong thread, not
+  the press rate. Once `_handle_key` is off the pump, a double-tap is harmless:
+  the second FORGET finds the label already cleared and says so.
+- **Draining the key queue after a teach/ask.** `_process` used to call
+  `_drain_keys()` to discard presses that piled up during the ~6 s
+  transcription. With a dedicated key thread nothing piles up — presses are
+  consumed within 0.2 s — so the drain was not just dead but dangerous: two
+  consumers on one queue means `get_nowait()` after `empty()` can raise, and
+  escaping that `finally` before `self.busy = False` wedges teach and ask until
+  restart. The remaining `_drain_keys()` call in `run()` is fine: it runs before
+  the key thread starts, so it is the only consumer.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -166,6 +314,7 @@ Useful reference numbers; re-measure before trusting them after any change.
   utterance. Thread count barely moves it (5.9 s at 6 threads vs 6.5 s at 2).
 - Nomic load ~4 s, then ~0.15 s per embed. CLIP vision embed ~0.16 s.
 - Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask.
+  Add one thread for the key handler (see "UI responsiveness").
 - Score parity (must hold), from the rewritten `verify_scores.py`, which crops
   **with the mask** as the app does: same-object min 0.887 / median 0.920,
   different-object median 0.472 / max 0.611, margin +0.275. The older numbers
@@ -244,6 +393,27 @@ Each of these was investigated and closed. Reopen only with new evidence.
   which is what lets the phone grant mic access. Verified: page and MJPEG stream
   both return 200 over the LAN IP. `sounddevice` stays a project dependency for
   laptop use.
+- **The cert warning cannot be removed, only made trustable.** No public CA will
+  sign a private LAN address, and reaching one needs internet this demo is built
+  not to need. What *was* wrong: the cert carried **no `subjectAltName` at all**
+  (`-subj /CN=l6-robot` only), and browsers stopped reading CN in 2017 — so it
+  named nothing, produced the harsher name-mismatch interstitial, and could not
+  have been fixed by trusting it. It was also valid 10 years, which Safari
+  rejects outright (>825 days) trusted or not. Now: SANs for the served IP plus
+  `127.0.0.1`/`localhost`/`<host>.local`, 397 days, and `basicConstraints
+  CA:TRUE` so a phone can install it as a root and stop warning for good —
+  Android will not install a leaf without `CA:TRUE`, iOS will. Served at
+  `/cert.crt` because a headless robot has no other easy way to hand a file to
+  a phone; that gives away nothing the TLS handshake already does.
+  Regenerated whenever the address changes, tracked by `cert/names.txt`, so
+  trust is per-address: a phone trusted on home Wi-Fi warns again at the booth.
+  Built with an openssl **config file**, not `-addext`, which the LibreSSL that
+  ships as `/usr/bin/openssl` on macOS does not have.
+  Verified end to end: with the cert loaded as a CA, hostname verification
+  passes over a real TLS handshake against `StreamHandler` (so a phone that has
+  installed it sees no warning), `/cert.crt` returns the bytes on the wire, an
+  untrusted client still refuses it, and an unchanged address does **not**
+  regenerate — a phone you trusted stays trusted across restarts.
 - Close Firefox and the Codex/ChatGPT Electron app before demoing. They hold
   ~3 GB and are the only reason swap appeared in late measurements.
 - `uv sync --locked --dry-run` wants to swap `nvidia-cusparselt-cu13 0.8.1`. It is
