@@ -18,6 +18,14 @@ def day_start_ts():
     return time.mktime(date.today().timetuple())
 
 
+# Attention hysteresis. Salience is recomputed every frame from box geometry,
+# so two objects of similar size and centrality otherwise trade the box back
+# and forth several times a second — and you cannot reliably teach or forget a
+# target that only holds still for 100 ms. A challenger must be this much more
+# salient than the incumbent to take focus from it.
+FOCUS_MARGIN = 1.25
+
+
 class Robot:
     def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
                  threshold=RECOGNIZE_THRESHOLD, conf=None, max_area=None,
@@ -29,6 +37,12 @@ class Robot:
         self.thumbs = Path(data_dir) / "thumbs"
         self.thumbs.mkdir(exist_ok=True)
         self.events = []  # recent memory writes, for the on-screen log
+        # What the robot is attending to, decided once per detect pass (see
+        # process_frame) so the front end reads a decision instead of
+        # recomputing one on every rendered frame.
+        self.attention = None  # panel subject, and the FORGET target
+        self.teachable = None  # the salient UNKNOWN, and the TEACH target
+        self._incumbent = {}   # pool name -> the Track currently holding focus
 
     def log(self, msg):
         self.events.append(f"{time.strftime('%H:%M:%S')}  {msg}")
@@ -64,8 +78,13 @@ class Robot:
 
         knowns = [t for t in tracks if t.label]
         primary = self.focused(
-            [t for t in tracks if not t.label and t.last_query])
+            [t for t in tracks if not t.label and t.last_query], pool="unknown")
         display = knowns + ([primary] if primary else [])
+        # Decided here, on the one thread that owns track state. The teach
+        # target is the salient unknown, never a known — otherwise a
+        # recognized object could steal focus and get relabeled.
+        self.teachable = primary
+        self.attention = self.focused(display, pool="view")
 
         for t in display:
             # only recognized objects are logged: an unnamed thing has no label
@@ -79,12 +98,28 @@ class Robot:
                 self.log(f"seen: {t.label} ({t.score:.2f})")
         return display
 
-    @staticmethod
-    def focused(tracks):
+    def focused(self, tracks, pool):
         """The teach/recognize subject: the most salient stable thing in
         view — size weighted by centrality, so the object held to the
-        middle of the frame wins over larger off-center clutter."""
-        return max(tracks, key=lambda t: t.salience) if tracks else None
+        middle of the frame wins over larger off-center clutter.
+
+        Sticky, by FOCUS_MARGIN: whatever holds focus keeps it until a
+        challenger is clearly more salient or its own track is gone. `pool`
+        names the candidate set, so the whole view and the unknowns-only set
+        each remember their own incumbent instead of overwriting each other.
+
+        The incumbent is held as the Track object, not its id: the tracker
+        restarts ids from 1 on reset, so an id would let a dead object hand
+        its focus to whatever new track inherits its number.
+        """
+        if not tracks:
+            return None
+        best = max(tracks, key=lambda t: t.salience)
+        held = self._incumbent.get(pool)
+        if held in tracks and best.salience < held.salience * FOCUS_MARGIN:
+            best = held
+        self._incumbent[pool] = best
+        return best
 
     # -- teach -----------------------------------------------------------------
 
@@ -114,8 +149,18 @@ class Robot:
     # -- forget / ignore -------------------------------------------------------
 
     def forget(self, label):
-        """Delete what the robot knows about one recognized object (L2 forget)."""
+        """Delete what the robot knows about one recognized object (L2 forget).
+
+        Also strips the label off anything still wearing it in view and makes
+        those tracks re-ask memory at the next pass, so the box turns red on
+        the press instead of at the next cadence tick — including tracks that
+        are momentarily off-screen and would otherwise keep a deleted name.
+        """
         n = self.memory.forget(label)
+        for t in self.detector.tracks.values():
+            if t.label == label:
+                t.label = t.note = t.thumb = None
+                t.requery_now()
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')
         return n
 
@@ -142,6 +187,9 @@ class Robot:
         self.memory.reopen()
         ms = (time.perf_counter() - t0) * 1000
         self.detector.reset()
+        # tracking state is gone, so the panel must not keep showing a subject
+        # from before the reboot; the next detect pass picks a fresh one
+        self.attention = self.teachable = None
         n = self.memory.count()
         self.log(f"shard reopened in {ms:.0f} ms — {n} memories")
         return n, ms

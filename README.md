@@ -92,6 +92,14 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
 
 Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
 
+### Aiming It
+
+`TEACH` acts on the most prominent **unknown** object; `FORGET` acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame.
+
+Focus is deliberately **sticky**: once an object holds the thick box, it keeps it until something is clearly more prominent — roughly 25% more — or until it leaves the frame. Without that, two objects of similar size and position trade the box several times a second, and you end up teaching whichever one happened to win on the frame you pressed. If focus won't leave an object, move the one you want closer or more central, or press `Q` / **IGNORE** to dismiss the current unknown outright.
+
+To trade a twitchier box for an easier-to-move one, `FOCUS_MARGIN` in `robot/core.py` is the single number: lower is more responsive and more jittery, higher is calmer and more stubborn.
+
 ### Flags
 
 The first three are per-camera settings whose permanent home is `.env`; the flags override it for a single run, which is what you want while calibrating.
@@ -138,6 +146,8 @@ Photos of distinct objects score lower than a live cluttered scene, so treat the
 ### What to teach
 
 Teach objects, not surfaces. A crop with little information in it — a blank panel, a reflective surface, a blurred fragment — sits near the middle of CLIP's space, close to everything, so it makes a memory that matches most of the room. That looks exactly like a broken threshold and isn't one. Fill more of the frame with the object and teach it again.
+
+Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, `F` / **FORGET** it and teach again.
 
 ## Phone Or Tablet Demo
 

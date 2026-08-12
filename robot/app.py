@@ -25,7 +25,9 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -186,6 +188,17 @@ def _ensure_cert():
     return str(cert), str(key)
 
 
+@lru_cache(maxsize=32)
+def _thumb_img(path):
+    """Thumbnails, read once. The panel is redrawn for every streamed frame,
+    and decoding the same JPEGs off disk ten times a second is visible jank on
+    the Jetson. Thumbs are write-once (`Robot._thumb` stamps the filename with
+    time_ns and `forget` deletes points, not files), so this cannot go stale.
+    32 crops at demo resolution is a few MB — keep it bounded, memory on this
+    board is the scarce thing."""
+    return cv2.imread(path)
+
+
 def _text(img, s, xy, scale=0.8, color=INK, thick=1):
     cv2.putText(img, s, xy, FONT, scale, color, thick, cv2.LINE_AA)
 
@@ -231,7 +244,7 @@ def draw_gauge(panel, y, score, threshold, x0=30, x1=PANEL_W - 30):
 def draw_match(panel, y, focused, threshold):
     """The match, visible: the remembered view next to the live view, with
     the score gauge between them — vector similarity an audience can see."""
-    left = (cv2.imread(focused.thumb)
+    left = (_thumb_img(focused.thumb)
             if focused is not None and focused.thumb else None)
     right = focused.crop if focused is not None else None
     for cap, img, x in (("remembers", left, 30),
@@ -298,7 +311,7 @@ def draw_panel(h, events, count, focused, banner, card,
         _text(panel, "SEEN", (20, y + 6), 0.7, INK, 2); y += 20
         for hit in res["seen"][:2]:
             p = hit.payload
-            thumb = cv2.imread(p["thumb"]) if p.get("thumb") else None
+            thumb = _thumb_img(p["thumb"]) if p.get("thumb") else None
             x = 30
             if thumb is not None and y + 56 < h - 40:
                 panel[y:y + 56, 24:80] = cv2.resize(thumb, (56, 56))
@@ -444,9 +457,10 @@ class LiveApp:
         self.jpeg = None   # latest composed view, ready for the stream
         self.keys = queue.Queue()
         self.busy = False  # a voice action is running; ignore T/A meanwhile
-        self.focused = None       # what the loop is attending to (panel/phone)
-        self.teachable = None     # the salient UNKNOWN — teach target, never a known
-        self.pending_crop = None  # crop stashed when the phone starts a teach
+        # What the robot attends to lives on the robot (see Robot.attention),
+        # decided by the detect thread that owns track state.
+        self.pending_crop = None   # crop stashed when a teach starts
+        self.pending_track = None  # ...and the track it came from
         self.stop = threading.Event()
 
     def _detect_loop(self):
@@ -516,8 +530,11 @@ class LiveApp:
                 with self.lock:
                     taught = self.robot.teach(crop, q)
                     self.mem_count = self.robot.memory.count()
-                    for t in self.robot.detector.tracks.values():
-                        t.last_query = 0  # requery now: watch it recognize
+                    if self.pending_track is not None:
+                        # the beat: watch that one box turn green. One embed,
+                        # not one per track — a burst of them under the lock is
+                        # what the detect thread stalls on
+                        self.pending_track.requery_now()
                 print(f'taught "{taught["label"]}": {taught["transcript"]!r}')
                 self.card = ("taught", taught)
                 self.banner = f'taught: "{taught["label"]}"'
@@ -529,7 +546,9 @@ class LiveApp:
                 self.banner = None
                 _speak(q, res)
         finally:
-            self._drain_keys()  # drop presses queued while this ran
+            # no key drain: the key thread handles presses as they arrive, so
+            # nothing piled up here, and racing it for the queue could throw
+            # before `busy` is cleared and wedge the robot
             self.busy = False
 
     def on_listen(self, kind):
@@ -537,14 +556,16 @@ class LiveApp:
         stash the crop in focus now — the object may drift before release."""
         self.banner = "LISTENING · speak now"
         if kind == "t":
-            f = self.teachable
-            self.pending_crop = (f.crop.copy()
-                                 if f is not None and f.crop is not None else None)
+            f = self.robot.teachable
+            got = f is not None and f.crop is not None
+            self.pending_crop = f.crop.copy() if got else None
+            self.pending_track = f if got else None
 
     def on_audio(self, kind, body):
         """Phone released hold-to-talk with a WAV. Returns an HTTP status.
-        Mirrors the main loop's busy-gate. Serialized by the single phone UI
-        in the demo; add a lock if multiple clients are ever allowed."""
+        Mirrors the busy-gate in `_handle_key`. Serialized by the single phone
+        UI in the demo; add a lock if multiple clients are ever allowed — the
+        check-and-set on `busy` below is not atomic."""
         if self.busy:
             return 409
         if kind == "t" and self.pending_crop is None:
@@ -594,6 +615,7 @@ class LiveApp:
         self.robot.detector.warm()
         self._drain_keys()  # ignore keys pressed before the feed was live
         threading.Thread(target=self._detect_loop, daemon=True).start()
+        threading.Thread(target=self._key_loop, daemon=True).start()
         try:
             self._loop()
         except KeyboardInterrupt:
@@ -601,71 +623,86 @@ class LiveApp:
         self.stop.set()
         server.shutdown()
         self.cap.release()
-        self.robot.close()
+        with self.lock:  # let an in-flight FORGET/REBOOT/teach finish first —
+            self.robot.close()  # closing the shard under a write can corrupt it
 
     def _loop(self):
-        """Main thread: pull frames, compose the view, act on key presses."""
+        """Main thread: pull frames and compose the view, nothing else.
+
+        Keep it that way. FORGET scans and flushes the shard and REBOOT
+        reopens it, and both want the lock the detect thread holds for a whole
+        YOLO pass — doing that here is a visible stall on the button, so key
+        presses are handled on their own thread.
+        """
         while True:
             ok, frame = self.cap.read()
             if not ok:
                 break
             self.latest = frame
-            tracks = list(self.tracks)
-            focused = self.robot.focused(tracks)
-            self.focused = focused
-            # teach the most salient UNKNOWN, not whatever's focused — a known
-            # object could otherwise steal focus and get relabeled
-            teachable = self.robot.focused([t for t in tracks if not t.label])
-            self.teachable = teachable  # phone teach reads this at hold-start
-            self._render(frame, tracks, focused)
+            self._render(frame, list(self.tracks), self.robot.attention)
+
+    def _key_loop(self):
+        """Key presses and touch buttons, off the frame pump. One thread, so
+        two fast taps on the same button run in order rather than at once."""
+        while not self.stop.is_set():
             try:
-                key = self.keys.get_nowait()
+                key = self.keys.get(timeout=0.2)  # short, so Ctrl-C is prompt
             except queue.Empty:
-                key = None
-            if key == "t" and not self.busy:
-                if teachable is None:
-                    self.banner = "nothing new to teach"
-                    continue
-                self.busy = True
-                threading.Thread(target=self._voice_action,
-                                 args=("t", teachable.crop.copy()),
-                                 daemon=True).start()
-            elif key == "a" and not self.busy:
-                self.busy = True
-                threading.Thread(target=self._voice_action,
-                                 args=("a", None),
-                                 daemon=True).start()
-            elif key == "f":
-                # forget the recognized object the panel is showing (focused)
-                if focused is None or not focused.label:
-                    self.banner = "nothing recognized to forget"
-                else:
-                    with self.lock:
-                        n = self.robot.forget(focused.label)
-                        self.mem_count = self.robot.memory.count()
-                        for t in self.robot.detector.tracks.values():
-                            t.last_query = 0  # requery: watch it go UNKNOWN
-                    self.card = ("forgot", (focused.label, n))
-                    self.banner = f'forgot "{focused.label}"'
-            elif key == "q":
-                # dismiss the current unknown so the robot stops offering it
-                if teachable is None:
-                    self.banner = "no unknown to ignore"
-                else:
-                    with self.lock:
-                        self.robot.ignore(teachable.tid)
-                    self.banner = "ignored, won't track that"
-            elif key == "r":
+                continue
+            try:
+                self._handle_key(key)
+            except Exception:  # a stray press must not kill the thread
+                print(f"key {key!r} failed:")
+                traceback.print_exc()
+
+    def _handle_key(self, key):
+        focused, teachable = self.robot.attention, self.robot.teachable
+        if key == "t" and not self.busy:
+            if teachable is None or teachable.crop is None:
+                self.banner = "nothing new to teach"
+                return
+            self.busy = True
+            # remember which track this taught, so only that one re-asks
+            # memory afterwards instead of every box on screen
+            self.pending_track = teachable
+            threading.Thread(target=self._voice_action,
+                             args=("t", teachable.crop.copy()),
+                             daemon=True).start()
+        elif key == "a" and not self.busy:
+            self.busy = True
+            threading.Thread(target=self._voice_action,
+                             args=("a", None),
+                             daemon=True).start()
+        elif key == "f":
+            # forget the recognized object the panel is showing (focused)
+            if focused is None or not focused.label:
+                self.banner = "nothing recognized to forget"
+            else:
+                label = focused.label
                 with self.lock:
-                    n, ms = self.robot.reboot()
-                    self.mem_count = n
-                    if self.card and self.card[0] == "answer":
-                        q = self.card[1][0]
-                        self.card = ("answer", (q, self.robot.ask(q)))
-                self.banner = f"rebooted in {ms:.0f} ms · {n} memories"
+                    n = self.robot.forget(label)
+                    self.mem_count = self.robot.memory.count()
+                self.card = ("forgot", (label, n))
+                self.banner = f'forgot "{label}"'
+        elif key == "q":
+            # dismiss the current unknown so the robot stops offering it
+            if teachable is None:
+                self.banner = "no unknown to ignore"
+            else:
+                with self.lock:
+                    self.robot.ignore(teachable.tid)
+                self.banner = "ignored, won't track that"
+        elif key == "r":
+            with self.lock:
+                n, ms = self.robot.reboot()
+                self.mem_count = n
+                if self.card and self.card[0] == "answer":
+                    q = self.card[1][0]
+                    self.card = ("answer", (q, self.robot.ask(q)))
+            self.banner = f"rebooted in {ms:.0f} ms · {n} memories"
 
     def _drain_keys(self):
-        """Drop key presses queued while a blocking teach/ask ran."""
+        """Drop key presses that arrived before the feed went live."""
         while not self.keys.empty():
             self.keys.get_nowait()
 
@@ -693,8 +730,8 @@ def replay(robot, source):
             robot.detector.reset()  # each image is its own scene
             prev = name
         now += 3.0  # spaced past the requery interval
-        tracks = robot.process_frame(frame, now)
-        f = robot.focused(tracks)
+        robot.process_frame(frame, now)
+        f = robot.attention
         if f and f.last_query == now:
             verdict = f.label or "UNKNOWN"
             print(f"{name}: {verdict} ({f.score:.3f})")

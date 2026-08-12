@@ -119,6 +119,12 @@ class Track:
     def due_for_query(self, now):
         return self.stable and now - self.last_query >= REQUERY_SECONDS
 
+    def requery_now(self):
+        """Make this track due at the next detect pass without pretending it
+        was never queried — clearing `last_query` outright blanks the panel to
+        "looking..." for a beat, which reads as a glitch right after a teach."""
+        self.last_query = time.time() - REQUERY_SECONDS
+
 
 class Detector:
     """YOLOE + BoT-SORT tracking + the stability gate."""
@@ -209,7 +215,11 @@ class Detector:
                 if not MIN_AREA <= area <= self.max_area:
                     continue
                 t = self.tracks.setdefault(tid, Track(tid))
-                t.frames += 1
+                # capped one above the gate: enough for the streak below to
+                # absorb a single blink, and no more. Every extra frame of
+                # credit is a frame where a departed object still has a box
+                # and a stale crop, and could be taught by mistake.
+                t.frames = min(t.frames + 1, STABLE_FRAMES + 1)
                 t.last_seen = now
                 t.box = box
                 # attention: size x centrality, so the object held to the
@@ -234,6 +244,10 @@ class Detector:
                 if now - t.last_seen > DEAD_SECONDS:
                     del self.tracks[tid]
                 else:
-                    t.frames = 0  # streak broken, must restabilize
+                    # decay, don't reset: the detector blinks on single frames,
+                    # and a reset hides an established box for STABLE_FRAMES
+                    # more passes, which is most of the on-screen flicker.
+                    # Two misses in a row still drop it (see the cap above).
+                    t.frames = max(0, t.frames - 1)
 
         return [t for t in self.tracks.values() if t.stable]
