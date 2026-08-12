@@ -15,6 +15,12 @@ hopped between objects.** Fixed in code and reviewed, **not yet confirmed on the
 device by the operator** — see "UI responsiveness" below for what to watch for
 and which two traps the review closed.
 
+**Fourth milestone, same day: the box became a headless appliance.** It serves
+its own Wi-Fi, starts the robot at boot, and needs no keyboard, screen, or venue
+network. Everything is installed and running on this machine and was verified
+live; the one thing **not** yet proven is a cold boot with the desktop gone,
+which needs a reboot the operator has to do. See "Headless appliance" below.
+
 ## Goal and constraints
 
 - Target: Jetson Orin Nano Super 8 GB, Ubuntu 24.04/aarch64, Jetson Linux R39.2 /
@@ -37,11 +43,14 @@ and which two traps the review closed.
 - PR #1 (`codex/enable-jetson-cuda`, the Jetson work) is **merged** into `main`.
 - PR #2 (the threshold calibration described under "Recognition threshold") is
   **merged** into `main` as of 2026-08-12.
-- Branch: `codex/calibrate-recognition-threshold`, reused after that merge and
-  now one commit ahead of `main`: the responsiveness work described under "UI
-  responsiveness", open as **PR #3**. It touches `robot/app.py`,
-  `robot/core.py`, `robot/detect.py`, the README and this file; it adds no
-  files and no dependencies.
+- PR #3 (the responsiveness work under "UI responsiveness") is **merged** into
+  `main` as of 2026-08-12, as is the cert work under "Operational notes". Note
+  the code merged before the operator confirmed the feel on the device; that
+  confirmation is still outstanding.
+- Branch: `codex/headless-appliance`, one commit ahead of `main`, open as
+  **PR #4**. It is the headless work below: `robot/app.py`, `robot/models.py`,
+  `testdata/verify_scores.py`, the README, this file, and a new `deploy/`
+  directory. No new dependencies.
 - `robot.log` is untracked runtime output and is now covered by `*.log` in
   `.gitignore`. `.env` is gitignored too; `.env.example` is tracked and is the
   documentation for every per-camera knob.
@@ -302,6 +311,195 @@ neither would have shown up on the bench quickly.
   restart. The remaining `_drain_keys()` call in `run()` is fine: it runs before
   the key thread starts, so it is the only consumer.
 
+## Headless appliance — boots into the demo, serves its own Wi-Fi
+
+The unit goes in a case with no keyboard, screen, or peripherals, and demos in
+rooms with no usable network. So: **apply power, and it boots into the robot on
+its own access point.** Operator-facing instructions are in the README under
+"Headless Appliance"; keep the SSID and password quoted there in sync with
+`deploy/headless-setup.sh`, which is where they are defined, and the address in
+sync with both the script and the unit (see the knobs paragraph below).
+
+`deploy/` holds the two tracked artefacts: `l6-robot.service` and the idempotent
+`headless-setup.sh` that installs everything. Re-run the script after editing
+either. It is safe to re-run while the robot is live: it will not bounce an
+access point that is already serving, and rather than restart the robot under
+someone's hands it prints the `systemctl restart l6-robot` needed to pick up a
+changed unit. The Wi-Fi block is deliberately **last**, after every step that
+needs internet — the review list below records what the wrong order did.
+
+Only `SSID` and `PSK` are knobs (`sudo SSID=my-robot ./deploy/headless-setup.sh`).
+The address is deliberately not one: `10.42.0.1` is fixed in both the script and
+the unit's `--advertise`, because a hotspot on one address and a certificate
+naming another is precisely the name-mismatch warning this whole path exists to
+avoid — an `AP_IP` knob existed briefly and was cut for exactly that reason. The
+service account is read out of the unit's `User=` rather than being a second
+knob that can disagree with it.
+
+### The five changes to the machine
+
+Service enabled, hotspot profile with every saved network parked, desktop off
+(`multi-user.target`, which also retires the OC3 popup applet), sshd, model
+cache under `$HOME`. The README tables all five with their undo commands under
+"What The Setup Changes" — keep that table authoritative rather than mirroring
+it here. One fact specific to this box: **ssh host keys were missing**, so sshd
+was enabled but dead; `ssh-keygen -A` creates only what is absent.
+
+### Two bugs this found, both fixed in the app
+
+**FastEmbed was caching 1.1 GB of encoders in `/tmp`.** Its default is
+`/tmp/fastembed_cache`, and `systemd-tmpfiles` prunes `/tmp` on a 30-day rule
+(`/usr/lib/tmpfiles.d/tmp.conf`, `D /tmp 1777 root root 30d`). A robot on its
+own hotspot has no internet, so the first boot after that sweep would hang in a
+download that can never finish — a demo that dies of old age, weeks later, for
+no visible reason. `robot/models.py` now passes `cache_dir=CACHE_DIR`
+(`~/.cache/fastembed`, honouring FastEmbed's own `FASTEMBED_CACHE_PATH`), and
+the existing cache was moved there rather than re-downloaded. Whisper was
+already safe: onnx-asr uses `~/.cache/huggingface`.
+
+Verified genuinely offline, not just with an offline flag: all four encoders
+load in ~2.5 s each inside `sudo unshare -n` (a namespace with nothing but
+loopback). So **no `HF_HUB_OFFLINE=1` is needed** in the unit — considered and
+rejected, because setting it would break a fresh install's first download for
+no benefit.
+
+`testdata/verify_scores.py` needed the same fix and was missed at first: it
+builds its own `ImageEmbedding` rather than going through `robot.models`, so
+running the calibration script re-downloaded 336 MB into `/tmp` — a second copy,
+in the directory the change exists to get out of. It now passes `CACHE_DIR` too.
+If you add another entry point that embeds anything, pass it as well; that is the
+whole reason `CACHE_DIR` is a module constant and not a default buried in a call.
+
+**A second SIGINT was aborting the shutdown, leaving the shard open.** systemd's
+default `KillMode=control-group` signals *every* process in the cgroup, so `uv`
+forwarded one SIGINT and the kernel delivered another. The second landed inside
+`server.shutdown()`, the `KeyboardInterrupt` escaped past `cap.release()` and
+`robot.close()`, and the process died in a native destructor: `terminate called
+without an active exception`, exit 134. Observed, not theorised. The shutdown
+sequence now lives in a `finally:` that starts with
+`signal.signal(SIGINT, SIG_IGN)`, which also fixes a human holding Ctrl-C — the
+same bug by hand. `KillMode=mixed` would have fixed only the systemd half, so it
+was not used; the app is now correct however it is launched. After the fix: stop
+takes 5 s, `Deactivated successfully`, exit 0, no traceback.
+
+Worth knowing: the shard was **not** corrupted by any of those aborts (61 points,
+reopens clean). Every write is flushed at upsert time, which is what makes
+pulling the plug the documented off switch.
+
+### Two new flags, both for unattended running
+
+- **`--advertise ADDR`.** `run()` derived the URL and certificate address from
+  `_lan_ip()` whenever `--host` was non-loopback, which on a hotspot with no
+  default route returns `127.0.0.1` — a certificate naming the wrong address,
+  which is the harsher name-mismatch interstitial and cannot be fixed by
+  trusting it. The service passes `--host 0.0.0.0 --advertise 10.42.0.1`: listen
+  everywhere (so Ethernet stays a maintenance path), name the hotspot address.
+  Because that address never changes, **phone trust is now permanent** — the
+  per-address regeneration warned about under "Operational notes" no longer
+  bites, since there is only ever one address. Verified: `cert/names.txt` is
+  `IP:10.42.0.1,IP:127.0.0.1,DNS:localhost,DNS:qdrant-robot.local`. It takes an
+  **IP only**, enforced in argparse: `_ensure_cert` writes it as an `IP:` SAN, a
+  hostname there makes openssl reject the certificate, and the `except` around
+  the TLS setup then serves plain http — the phone mic disappears over a typo,
+  with one line of warning. `loopback` is derived from `host`, never from the
+  advertised address; deriving it from `addr` silently downgrades
+  `--host 0.0.0.0` to http on a box with no default route.
+- **`--watchdog SECONDS`** (service uses 30, default 0 = off). A USB camera that
+  fails cleanly already ends `_loop`, because `cap.read()` returns False. This is
+  for one that wedges *inside* the driver call, which the frame pump cannot
+  notice because it is the thread that is stuck. It `os._exit(1)`s — deliberately
+  not a clean close, since `self.lock` may never come free, and safe because
+  writes are already flushed. Default off because on a laptop a closed lid is
+  indistinguishable from a stalled camera.
+
+  Two details it is easy to get wrong, and this code got wrong first:
+
+  - **It arms its own clock (`frame_at = monotonic()`) instead of waiting for a
+    first frame.** A `frame_at is None` guard looks like it protects warm-up, but
+    the thread only starts *after* `warm_up()` and `detector.warm()` return, so
+    the guard's only real effect was to exempt a camera that wedges on its very
+    first read — which is exactly what a power-cut USB device does, and exactly
+    what the flag exists for. The robot would sit on the splash screen forever,
+    with no restart and no log line, on a box with no screen.
+  - **The clock is `time.monotonic()`, not `time.time()`.** The operator is told
+    to set the appliance's date by hand while it runs (see "The clock" below), and
+    a wall clock stepped a day forward reads as a stall and kills a healthy robot.
+    A backward step is worse: it blinds the watchdog for the length of the offset.
+
+  Covered by a throwaway stub test, not by anything in the repo: fires on a stall,
+  fires when no frame ever arrives, quiet while frames arrive, exits promptly on
+  `self.stop` (it waits on the event rather than sleeping, so a shutdown cannot be
+  shot from under itself). Monotonic immunity is by construction, not tested — you
+  cannot step the clock on a live box to prove it.
+
+`PYTHONUNBUFFERED=1` is in the unit for a duller reason: Python block-buffers
+stdout into a pipe, so `journalctl -u l6-robot -f` showed only torch's startup
+warning while every robot log line sat in a buffer — and on the abort above,
+that buffer was lost.
+
+### Verified live, and the one thing that is not
+
+Verified on this box, service running as `qdrant` under systemd: page and
+`/cert.crt` return 200 over HTTPS on `https://10.42.0.1:8765`, the MJPEG stream
+delivers ~32 MB in 5 s, RSS **2.33 GB / 19 threads** — the documented healthy
+startup baseline, so CUDA and the encoders load fine with no session and no
+display. The AP is real (`iw dev`: `type AP`, channel 6, 20 MHz), with dnsmasq
+and a `nm-shared-wlP1p1s0` MASQUERADE rule, which is also why the hotspot
+carries internet whenever Ethernet is plugged in.
+
+**Not verified: a cold boot.** `set-default multi-user.target` takes effect on
+the next reboot, and nobody has rebooted since. If it comes up wrong, sshd is
+the way back in — over the hotspot, or Ethernet.
+
+### Found by adversarial review of the diff — don't reintroduce these
+
+None were found by testing; the appliance looked fine on the bench with all of
+them present, which is the point.
+
+- **The watchdog's `frame_at is None` guard, and its wall clock** — both
+  dissected under "--watchdog" above.
+- **`ssid` set only on profile create, not on modify.** Re-running with a new
+  `SSID=` — the advertised use — changed the password and printed the new name
+  while the radio kept broadcasting the old one.
+- **Wi-Fi ran first, cutting the radio before the 1.1 GB encoder download that
+  needed it** — and cutting your own ssh session if it came in over Wi-Fi. The
+  Wi-Fi block is last now, and must stay last.
+- **An `AP_IP` knob let the script and the unit's `--advertise` disagree**,
+  reintroducing the certificate mismatch. Fixed by deleting the knob, not by
+  syncing machinery: the address is fixed in both files.
+- **The parking loop split `nmcli -t` output on `:`**, so a profile name
+  containing a colon stayed free to grab the radio at boot. It iterates by UUID.
+- **The README's older manual-hotspot recipe still lacked `--advertise`**, so
+  following it reproduced the mismatched certificate. Fixing the service path
+  is not fixing the docs path.
+
+### The clock, an open wart with two documented fixes
+
+Not a bug in the code, but it shows in the demo: recall speaks timestamps, and
+an offline robot's clock is whatever `systemd-timesyncd` last saved to
+`/var/lib/systemd/timesync/clock` — there is no NTP on its own hotspot, and the
+board keeps no time across a power cut without a coin cell on the RTC backup
+battery connector (`J3` in the carrier board spec; `J13` beside it is the fan).
+So a unit switched on cold at a booth stamps memories with the time it was
+packed away. README "The Clock, Which Recall Reads Out Loud" gives the two
+fixes: `timedatectl set-time` over ssh, or fit the cell. Neither is done here —
+the box is on Ethernet and NTP-synced right now, which hides it.
+
+### Rejected here
+
+- **A physical power button.** Unnecessary for *on*: NVIDIA documents the kit as
+  powering on automatically when DC is applied. The carrier board does have a
+  button header, but the pin numbers live in the Carrier Board Specification PDF
+  behind NVIDIA's download login, and the same header carries force-recovery and
+  reset — so the README says confirm against the board and does **not** print
+  pin numbers. Do not fill them in from a blog post.
+- **A user-level service with lingering.** A system unit with `User=qdrant` needs
+  no login session to exist, which is the whole point of a headless box.
+- **Automatic fallback between venue Wi-Fi and the hotspot.** Rejected: it needs
+  a dispatcher script, and the address then depends on which branch won, which
+  puts the certificate warning back on every phone. A fixed address is worth
+  more than automatic internet.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -315,6 +513,9 @@ Useful reference numbers; re-measure before trusting them after any change.
 - Nomic load ~4 s, then ~0.15 s per embed. CLIP vision embed ~0.16 s.
 - Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask.
   Add one thread for the key handler (see "UI responsiveness").
+- Same app as a systemd service, no desktop session: **2.3–2.5 GB / 19 threads**,
+  i.e. no penalty for running headless. A clean `systemctl stop` takes 3–5 s, all
+  of it the shard close. The desktop it replaces was holding ~1.5 GB.
 - Score parity (must hold), from the rewritten `verify_scores.py`, which crops
   **with the mask** as the app does: same-object min 0.887 / median 0.920,
   different-object median 0.472 / max 0.611, margin +0.275. The older numbers
@@ -407,6 +608,9 @@ Each of these was investigated and closed. Reopen only with new evidence.
   a phone; that gives away nothing the TLS handshake already does.
   Regenerated whenever the address changes, tracked by `cert/names.txt`, so
   trust is per-address: a phone trusted on home Wi-Fi warns again at the booth.
+  **The appliance sidesteps that**: it serves its own hotspot at a fixed address
+  and names it with `--advertise`, so there is only ever one address to trust and
+  trusting it is permanent. See "Headless appliance".
   Built with an openssl **config file**, not `-addext`, which the LibreSSL that
   ships as `/usr/bin/openssl` on macOS does not have.
   Verified end to end: with the cert loaded as a CA, hostname verification

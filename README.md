@@ -48,7 +48,7 @@ cp .env.example .env
 uv run python -m robot.app
 ```
 
-The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo).
+The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo). For the demo unit in its case — no keyboard, no screen, its own Wi-Fi, starts on power — see [Headless Appliance](#headless-appliance).
 
 The defaults in `.env` are tuned for one specific camera. Read [Calibrating For Your Camera](#calibrating-for-your-camera) before you conclude that recognition is broken — the single most common symptom, everything in the room matching the last thing you taught, is a threshold that hasn't been calibrated.
 
@@ -113,6 +113,8 @@ The first three are per-camera settings whose permanent home is `.env`; the flag
 | `--reset` | Wipe all memories before starting, for a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
 | `--camera 1` | Use a different webcam. |
 | `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
+| `--advertise 10.42.0.1` | Address to put in the URL and the certificate, when it is not the one to look up. Used by the headless appliance, whose own hotspot address never changes — see [Headless Appliance](#headless-appliance). |
+| `--watchdog 30` | Exit if the camera delivers no frame for this long, so a service manager can restart the robot. Off by default: on a laptop, closing the lid looks exactly like a stalled camera. |
 
 ## Calibrating For Your Camera
 
@@ -182,15 +184,85 @@ This works offline in either setup:
 
 ```bash
 sudo nmcli device wifi hotspot ssid l6-robot password <password>
+uv run python -m robot.app --host 0.0.0.0 --advertise 10.42.0.1
 ```
 
-Then open `https://10.42.0.1:8765`.
+Then open `https://10.42.0.1:8765`. `--advertise` is what makes the certificate name the hotspot's address: without it the app names whichever address it can look up — the Ethernet one, or `127.0.0.1` when the hotspot is the only network — and a certificate that names an address you are not opening gives the harsher warning described above, the one trusting it cannot fix.
+
+For the permanent version of this, where the robot boots into the hotspot by itself, see [Headless Appliance](#headless-appliance).
 
 On a laptop, the `T` and `A` keys use the laptop mic through `sounddevice`. If the wrong input is selected, set `MIC_DEVICE` in `robot/audio.py`. To list devices:
 
 ```bash
 uv run python -c "import sounddevice; print(sounddevice.query_devices())"
 ```
+
+## Headless Appliance
+
+The demo unit has no keyboard, no screen, and no network it can rely on. Set up as an appliance, it needs none of them: apply power and it boots into the robot, brings up **its own Wi-Fi network**, and stays live until the power goes away.
+
+```bash
+sudo ./deploy/headless-setup.sh
+sudo reboot
+```
+
+Then, from a phone — anywhere, including a booth with no Wi-Fi at all:
+
+1. Join the Wi-Fi network **`l6-robot`**, password **`qdrantedge`**.
+2. Open **`https://10.42.0.1:8765`**.
+3. Accept the certificate once, or install it from `https://10.42.0.1:8765/cert.crt` to stop being asked. Unlike the LAN case, this trust is **permanent**: the robot's hotspot address never changes, so the certificate never has to be reissued.
+
+Set your own network name and password by running the script with them: `sudo SSID=my-robot PSK=my-password ./deploy/headless-setup.sh`.
+
+**Your phone keeps its cellular service.** Joining the robot only takes over the phone's Wi-Fi; both iOS and Android keep sending internet traffic over mobile data once they notice the robot's network has no internet path. iOS says "No Internet Connection" under the network name and works fine. On Android, *Settings → Network & internet → Internet → "Switch to mobile data automatically"* is the one setting that can drop the Wi-Fi association outright; turn it off for that phone if it misbehaves. And when the robot happens to have Ethernet plugged in, its hotspot shares that connection, so there is real internet on it too.
+
+### Turning It On And Off
+
+There is no power button, and the Jetson does not need one: *"By default, Jetson Orin Nano Developer Kit turns on automatically as soon as the included DC power supply is connected to the DC power jack"* ([user guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/howto.html)). Plugging the case in is the on switch.
+
+**Pulling the plug is the off switch, and it is safe for the memories.** Every teach writes one point and flushes it to disk immediately — `Memory._upsert` does this on purpose, because the lesson's offline-reboot beat power-cycles the device. There is no buffered state to lose. For a graceful shutdown anyway, `ssh qdrant@10.42.0.1 sudo poweroff`.
+
+If you would rather have a real button in the case, the carrier board has a button header for one — a short press then gives a clean soft shutdown as well as power-on. The pin assignments are in the *Jetson Orin Nano Developer Kit Carrier Board Specification* (Jetson Download Center); confirm them against your board rather than against a blog post, because the same header also carries the force-recovery and reset pins.
+
+### The Clock, Which Recall Reads Out Loud
+
+Worth knowing before it embarrasses you on camera: recall says *"I saw my keys at 2:14 PM"*, and a robot that has been unplugged and has no internet does not know what time it is. There is no NTP server on its own hotspot, and `systemd-timesyncd` restores the **last time it saw** at boot rather than the real one — so a robot switched on cold at a booth stamps new memories with the time it was last packed away.
+
+Two fixes, either is enough:
+
+- **Set it once over ssh** when you set up for the day: `sudo timedatectl set-ntp false && sudo timedatectl set-time "2026-08-12 09:30:00"`, then `sudo systemctl restart l6-robot`. Turn NTP back on (`set-ntp true`) when the robot is next on a real network. The restart is because track ageing still reads the wall clock, so a large step leaves the boxes on screen confused for a few seconds; the watchdog itself is immune to it.
+- **Fit a coin cell to the RTC backup battery connector** on the carrier board, which keeps the clock running with the power off. It is a 2-pin 1.25 mm connector, `J3` in the [Carrier Board Specification](https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/orin_nano/docs/jetson_orin_nano_devkit_carrier_board_specification_sp.pdf) — confirm against your own board, since `J13` next to it is the fan. Discussion and a working socket part are in [this NVIDIA forum thread](https://forums.developer.nvidia.com/t/rtc-battery-on-jetson-orin-nano-developer-kit/296732).
+
+Plugging Ethernet in for a minute also fixes it, whenever that is an option.
+
+### What The Setup Changes
+
+Five things, each reversible on its own:
+
+| Change | Why | Undo |
+|---|---|---|
+| Installs and enables `l6-robot.service` | Starts the robot at boot and restarts it if it dies | `sudo systemctl disable --now l6-robot` |
+| Adds an `l6-hotspot` Wi-Fi profile in AP mode, and sets saved networks to not autoconnect | One radio cannot be an access point and a client at once, and the robot must work where there is no network | `sudo nmcli con delete l6-hotspot`, then re-enable autoconnect on your own network |
+| `systemctl set-default multi-user.target` | Frees roughly 1.5 GB of GNOME on an 8 GB board, next to a robot process that reaches 3.4 GB. It also retires the over-current popup, which is a desktop applet | `sudo systemctl set-default graphical.target` |
+| Generates ssh host keys and starts `sshd` | The only way into a box with no peripherals. A missing host key leaves `sshd` enabled but dead, which you discover at the worst moment | — |
+| Fills the model cache under `$HOME` | `FastEmbed` defaults to `/tmp`, which `systemd-tmpfiles` prunes at 30 days. Losing 1.1 GB of encoders on a robot with no internet means it boots into a download that never finishes | — |
+
+### Maintenance
+
+From a laptop joined to `l6-robot`, or over Ethernet when the robot is on a desk — the view is served on every interface, though opening it on the Ethernet address warns about the certificate, which names the hotspot:
+
+```bash
+ssh qdrant@10.42.0.1
+journalctl -u l6-robot -f          # the robot's console output
+sudo systemctl restart l6-robot    # after editing code or .env
+```
+
+To get the robot back onto a real network for updates, plug in Ethernet, or `sudo nmcli con up "<your network>"` — the saved profiles are kept, just stopped from autoconnecting. Bring the hotspot back with `sudo nmcli con up l6-hotspot`.
+
+Two behaviours worth knowing before you debug them:
+
+- **A crash is invisible and self-healing.** The service restarts 10 seconds later and takes about 40 seconds to reload the detector, so an unplugged camera looks like a robot that is simply slow to come back. `journalctl -u l6-robot` is where the reason is.
+- **The service runs with `--watchdog 30`.** A USB camera that wedges *inside* a driver call cannot be noticed by the thread stuck in it, so the app exits if no frame arrives for 30 seconds and lets systemd restart it. If you ever see a restart with no error above it, that was this.
 
 ## Project Layout
 
@@ -202,6 +274,7 @@ uv run python -c "import sounddevice; print(sounddevice.query_devices())"
 | `robot/memory.py` | Qdrant Edge teach, recognize, and day-recall logic |
 | `robot/models.py` | Embedding and speech model setup |
 | `robot/config.py` | Per-camera settings, read from `.env` |
+| `deploy/` | `headless-setup.sh` and the systemd unit that make it an appliance |
 | `testdata/` | Replay fixtures, plus `verify_scores.py` for calibration |
 
 Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.
