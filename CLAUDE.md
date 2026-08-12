@@ -35,10 +35,12 @@ and which two traps the review closed.
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
 - PR #1 (`codex/enable-jetson-cuda`, the Jetson work) is **merged** into `main`.
-- Branch: `codex/calibrate-recognition-threshold`, holding the threshold
-  calibration work described under "Recognition threshold", plus the
-  responsiveness work described under "UI responsiveness". The latter touches
-  `robot/app.py`, `robot/core.py`, `robot/detect.py` and the README; it adds no
+- PR #2 (the threshold calibration described under "Recognition threshold") is
+  **merged** into `main` as of 2026-08-12.
+- Branch: `codex/calibrate-recognition-threshold`, reused after that merge and
+  now one commit ahead of `main`: the responsiveness work described under "UI
+  responsiveness", open as **PR #3**. It touches `robot/app.py`,
+  `robot/core.py`, `robot/detect.py`, the README and this file; it adds no
   files and no dependencies.
 - `robot.log` is untracked runtime output and is now covered by `*.log` in
   `.gitignore`. `.env` is gitignored too; `.env.example` is tracked and is the
