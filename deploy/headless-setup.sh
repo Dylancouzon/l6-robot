@@ -20,6 +20,11 @@ PSK="${PSK:-qdrantedge}"          # WPA2 needs 8+ characters
 # the certificate, and the two disagreeing is the name-mismatch warning the
 # whole headless path exists to avoid.
 AP_IP="10.42.0.1"
+# Also not a knob, and named once so the modify below and the already-up check
+# further down cannot disagree about which channel the radio should be on.
+# Reasoning for 5 GHz and for this channel is at the Wi-Fi step.
+BAND="a"
+CHANNEL="44"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNIT="$REPO/deploy/l6-robot.service"
 # Read the account out of the unit rather than taking it as a knob: the unit
@@ -71,12 +76,20 @@ wifi_dev="$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1
 if ! nmcli -t -f NAME con show | grep -qx l6-hotspot; then
   nmcli con add type wifi ifname "$wifi_dev" con-name l6-hotspot ssid "$SSID" >/dev/null
 fi
+# 5 GHz, not 2.4. The MJPEG feed is the whole demo and it wants ~13 Mbps; a
+# 2.4 GHz 20 MHz AP delivers 15-25 Mbps in an empty room and much less in a hall
+# full of phones, so the link becomes the bottleneck, TCP queues rather than
+# drops, and the feed arrives as a slideshow seconds behind the room. Channel 44
+# is non-DFS (no radar wait before it may transmit) and clear of the 149-165
+# block most venue kit crowds into. The trade is range: 5 GHz carries less far
+# and through less, so keep the phone in the same room as the robot.
 # ssid is set here too, not only on create: without it, re-running with a new
 # SSID= would change the password and print the new name while the radio kept
 # broadcasting the old one.
 nmcli con modify l6-hotspot \
   802-11-wireless.ssid "$SSID" \
-  802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 6 \
+  802-11-wireless.mode ap \
+  802-11-wireless.band "$BAND" 802-11-wireless.channel "$CHANNEL" \
   802-11-wireless.powersave 2 \
   ipv4.method shared ipv4.addresses "$AP_IP/24" ipv6.method ignore \
   wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PSK" \
@@ -96,7 +109,24 @@ done < <(nmcli -t -f UUID,TYPE con show)
 # Don't bounce an access point that is already serving: re-running this script
 # should not drop the phones currently connected to it.
 if nmcli -t -f NAME con show --active | grep -qx l6-hotspot; then
-  echo "hotspot already up"
+  # ...but say so when the profile no longer matches the air. A changed band or
+  # channel only reaches the radio on a bounce, and the same silent-mismatch
+  # trap as the ssid above applies: printing the new channel while the old one
+  # broadcasts sends you debugging the wrong layer.
+  # Both the name and the channel: a re-run with a new SSID= writes the profile
+  # and would otherwise print the new name while the radio still broadcasts the
+  # old one, sending the room to a network that does not exist.
+  info="$(iw dev "$wifi_dev" info 2>/dev/null || true)"
+  live_ch="$(awk '$1=="channel"{print $2}' <<<"$info")"
+  live_ssid="$(sed -n 's/^[[:space:]]*ssid //p' <<<"$info")"
+  if [[ -n "$live_ch" && "$live_ch" != "$CHANNEL" ]] ||
+     [[ -n "$live_ssid" && "$live_ssid" != "$SSID" ]]; then
+    echo "hotspot is up as \"$live_ssid\" on channel $live_ch;"
+    echo "  the profile now says \"$SSID\" on channel $CHANNEL"
+    echo "  to apply it (drops connected clients): nmcli con up l6-hotspot"
+  else
+    echo "hotspot already up"
+  fi
 else
   nmcli con up l6-hotspot >/dev/null
 fi

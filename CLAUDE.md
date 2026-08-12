@@ -21,6 +21,21 @@ network. Everything is installed and running on this machine and was verified
 live; the one thing **not** yet proven is a cold boot with the desktop gone,
 which needs a reboot the operator has to do. See "Headless appliance" below.
 
+**Fifth issue, same day: over the hotspot the feed ran slow and arrived 5+ s
+late.** Two causes, both fixed and both measured on this box: 60% of the bytes
+on the wire were the same frame sent again, and the hotspot was on 2.4 GHz.
+See "Streaming over the hotspot" below. Frame rate confirmed good by the
+operator afterwards.
+
+**Sixth issue, same day: teaching by voice returned nonsense labels and each
+action seemed to freeze for seconds.** Neither was headless and neither was the
+robot — measured, no action stalls the frame pump by more than 149 ms. Whisper
+was being handed the whole button hold, silence included, which both makes it
+hallucinate and costs 16 s. Fixed by trimming to the speech region and by
+keeping the browser mic open. See "The voice path" below. **Not yet confirmed by
+the operator**, and one limit is unfixed: whisper-base mishears bare single
+words, so the demo script should say "this is my laptop".
+
 ## Goal and constraints
 
 - Target: Jetson Orin Nano Super 8 GB, Ubuntu 24.04/aarch64, Jetson Linux R39.2 /
@@ -47,10 +62,12 @@ which needs a reboot the operator has to do. See "Headless appliance" below.
   `main` as of 2026-08-12, as is the cert work under "Operational notes". Note
   the code merged before the operator confirmed the feel on the device; that
   confirmation is still outstanding.
-- Branch: `codex/headless-appliance`, one commit ahead of `main`, open as
-  **PR #4**. It is the headless work below: `robot/app.py`, `robot/models.py`,
-  `testdata/verify_scores.py`, the README, this file, and a new `deploy/`
-  directory. No new dependencies.
+- PR #4 (the headless appliance work below) is **merged** into `main` as of
+  2026-08-12. It brought `deploy/`, `--advertise` and `--watchdog`.
+- Working tree: the streaming fix under "Streaming over the hotspot" and the
+  voice fixes under "The voice path" are **uncommitted on `main`** —
+  `robot/app.py`, `robot/audio.py`, `deploy/headless-setup.sh`, the README and
+  this file. Branch before committing them. No new dependencies.
 - `robot.log` is untracked runtime output and is now covered by `*.log` in
   `.gitignore`. `.env` is gitignored too; `.env.example` is tracked and is the
   documentation for every per-camera knob.
@@ -316,9 +333,10 @@ neither would have shown up on the bench quickly.
 The unit goes in a case with no keyboard, screen, or peripherals, and demos in
 rooms with no usable network. So: **apply power, and it boots into the robot on
 its own access point.** Operator-facing instructions are in the README under
-"Headless Appliance"; keep the SSID and password quoted there in sync with
+"Headless Appliance"; keep the SSID, password and band quoted there in sync with
 `deploy/headless-setup.sh`, which is where they are defined, and the address in
-sync with both the script and the unit (see the knobs paragraph below).
+sync with both the script and the unit (see the knobs paragraph below). The band
+is 5 GHz for a measured reason — see "Streaming over the hotspot".
 
 `deploy/` holds the two tracked artefacts: `l6-robot.service` and the idempotent
 `headless-setup.sh` that installs everything. Re-run the script after editing
@@ -500,6 +518,191 @@ the box is on Ethernet and NTP-synced right now, which hides it.
   puts the certificate warning back on every phone. A fixed address is worth
   more than automatic internet.
 
+## Streaming over the hotspot — slow feed, 5+ s behind the room
+
+Symptom, reported from a laptop joined to the robot's own Wi-Fi: low frame rate
+and a delay over five seconds. It had been fine on the desk over Ethernet, which
+is the tell — **nothing about running headless is slow; the radio was.**
+
+Two causes, both measured here rather than reasoned about.
+
+**60% of the bytes were duplicate frames.** The `/stream` handler pushed
+`self.jpeg` on a fixed `time.sleep(0.04)` tick — 25 fps — while the pump renders
+at the camera's 10 fps. Measured over 7 s on loopback: 171 frames sent, **69
+unique**, 32.2 MB, **37 Mbps**. Every third-of-a-frame the browser decoded was a
+frame it already had. Free on Ethernet, which is why it survived this long.
+
+The fix is a sequence number, not a timer. `LiveApp._publish` stamps each
+composed JPEG and stores `self.shot = (seq, bytes)` — **one tuple, assigned in
+one bytecode**, so the number and the bytes cannot disagree the way two separate
+attributes could. The handler sends only when the seq changes, and always reads
+the *latest* shot, so a client that falls behind loses frames instead of
+accumulating lag. After: 68 frames, 68 unique, **13.1 Mbps at 9.7 fps** — the
+same frame rate, a third of the bytes. `self.jpeg` is gone; `splash()` publishes
+through the same method.
+
+**The hotspot was on 2.4 GHz channel 6 at 20 MHz.** That carries 15–25 Mbps in
+an empty room and much less in a hall full of phones, against a 13 Mbps demand —
+so the link was the narrowest part of the chain. The failure mode is what makes
+it confusing: TCP does not drop what it cannot send, it queues, so the feed stays
+smooth and falls further behind the longer you watch. It reads as a slow robot.
+Now **5 GHz channel 44**, set in `deploy/headless-setup.sh` (`BAND`/`CHANNEL`,
+named once, not knobs). Verified live: `type AP`, `channel 44 (5220 MHz)`, same
+SSID, same `10.42.0.1`, dnsmasq and the MASQUERADE rule intact, page 200.
+
+Channel 44 rather than the alternatives: 36, 48 and everything from 52 to 140 are
+`no IR` in this box's world regulatory domain, so an AP cannot initiate there —
+`iw phy phy0 info` leaves exactly 40, 44, 149 and 157. Of those, 44 is non-DFS
+and clear of the 149–165 block venue kit crowds into. NM 1.46 has no AP channel
+width property, so it is HT20; 5 GHz HT20 on an empty band is already several
+times the demand, and forcing HT40 was not needed.
+
+**Because the address never changes, none of this touched certificate trust** —
+that is the whole point of the fixed `10.42.0.1` and `--advertise`.
+
+### Two things this is not
+
+- **Not a headless penalty.** RSS and thread count are unchanged from the
+  documented baseline; there is no desktop to blame and CUDA is fine.
+- **Not the camera or the detector.** 9.7 fps *is* the camera's ceiling (103 ms
+  per `cap.read()`). The stream now delivers every frame the pump composes, so
+  there is nothing left to win on the network path without lowering quality.
+
+### The knob, if a venue is worse than this
+
+`STREAM_QUALITY` in `robot/app.py`, was a bare `85` at the `imencode` call.
+Measured on a real composed 1760x720 frame: 183 KB at 85, 154 at 75, 134 at 70,
+100 at 60 — i.e. 15.0 / 12.6 / 11.0 / 8.2 Mbps at 10 fps. Left at **85**: the
+duplicate fix and the band move together give enough headroom that paying in
+image quality was not justified. Turn it down only against a measurement.
+
+Diagnose in this order, because it separates the robot from the radio:
+`timeout 5 curl -sk https://127.0.0.1:8765/stream -o /dev/null -w '%{size_download}'`
+measures what the app *wants* to push with the radio out of the picture; if that
+is comfortable and the phone still lags, it is the link. `iw dev wlP1p1s0 info`
+says which band the AP is actually on, which is not always what a profile says —
+see below.
+
+### Found by review, closed
+
+- **The script's "don't bounce a live AP" branch would have lied.** It exists so
+  a re-run cannot drop connected phones, but a changed band or channel only
+  reaches the air on a bounce, so it would have printed the new channel while
+  the radio kept broadcasting the old one — the same silent-mismatch trap as the
+  `ssid`-on-modify bug above, and it would have sent the next person debugging
+  the wrong layer. It now compares `iw dev` against `CHANNEL` and prints the
+  `nmcli con up l6-hotspot` needed. Confirmed by watching the channel half fire
+  on this run. It compares the **name as well as the channel**: a re-run with a
+  new `SSID=` is the advertised use, and that is the case that would send a room
+  to a network that does not exist.
+- **`BAND`/`CHANNEL` are named once.** Hardcoding 44 in both the `con modify`
+  and the check is the `AP_IP` mistake again: two places free to disagree.
+- **The README's manual hotspot recipe still said plain
+  `nmcli device wifi hotspot`**, which defaults to 2.4 GHz — so following the
+  docs path reproduced the bug the service path had just fixed. It now passes
+  `band a channel 44`. Fixing the service is not fixing the docs, which is the
+  second time that exact trap has come up in this repo.
+
+## The voice path — hallucinated labels, and an action that looks like a freeze
+
+Reported together with the streaming problem above, and asked as "why is
+headless worse?". **On the evidence, headless is not worse and the robot is not
+freezing.** Measured on loopback with the radio out of the picture, sampling
+every frame gap for 14 s while firing an action at the 4 s mark:
+
+| | frames | median gap | max gap | stalls > 400 ms |
+|---|---|---|---|---|
+| idle | 136 | 101 ms | 122 ms | none |
+| during FORGET | 136 | 102 ms | 125 ms | none |
+| during a full voice ask | 136 | 102 ms | 149 ms | none |
+
+So the "UI responsiveness" work above is confirmed on the device by measurement,
+at least on the server side: nothing the buttons do reaches the frame pump. The
+harness is `gaps.py` in the session scratchpad — throwaway, not in the repo.
+
+What is real is that **an action takes 16 seconds**, and the feed running
+perfectly while nothing else happens reads exactly like a freeze.
+
+### The cause: Whisper was being handed the button hold, not the utterance
+
+The actual failing capture was still on disk at `/tmp/l6-utterance.wav` — 48 kHz
+mono, **7.72 s long, holding 1.4 s of speech**, the rest room noise at rms 4–20.
+Transcribed as-is and then trimmed to the speech region:
+
+| | duration | transcribe | result |
+|---|---|---|---|
+| as uploaded | 7.72 s | **16.3 s** | `'L L L L L L L L L…'` |
+| trimmed to speech | 2.00 s | **5.2 s** | `'La-caw.'` |
+
+That is the operator's exact symptom reproduced from their own audio. Whisper
+hallucinates repetitions when given long silence, and it charges for every
+second it is given — so one generous hold caused both the nonsense label and the
+16 s wait. `is_silent` does not catch it: the clip's overall rms is 929, well
+over the 120 floor, because a quarter of it *is* speech.
+
+`audio.trim_to_speech(path)` now cuts both ends in place before `transcribe`,
+using the same `SPEECH_RMS` bar `record_wav` stops on, with 0.2 s of pad. It is
+idempotent, returns the kept duration for the log line, and no-ops on a WAV that
+is not 16-bit mono or where nothing crosses the bar.
+
+**It fails open, and there is a gap between the two bars.** `is_silent` passes
+anything at rms 120 or above, while the trim needs a 100 ms block at 200 — so a
+soft-spoken hold is neither rejected nor trimmed, and gets the full-length
+treatment with the hallucination that comes with it. Left as is on purpose:
+locating speech in a clip that quiet means guessing, and the rms line in the log
+already tells the operator to speak up. Do not close it by lowering
+`SPEECH_RMS` — `record_wav` stops recording on that same number, and a lower bar
+means the laptop path stops on room noise.
+
+**The word itself is a separate, unfixed limit.** `La-caw` was "laptop", and it
+stays `La-caw` after trimming. Gain is not the reason — the clip already peaks at
+41% of full scale, and normalizing to 50% and 90% returned `La-caw` both times,
+so **level normalization was tried and rejected on measurement**. It is
+whisper-base on a bare isolated noun. The fix is operator-facing and free: say
+"this is my laptop", which is also the phrase `parse_label` is written to read.
+README "What to say" carries this.
+
+### The browser mic was rebuilt on every press
+
+`start()` ran `getUserMedia`, built an `AudioContext`, and compiled the worklet
+*after* the finger was down, and `stop()` tore all three down again — so every
+utterance paid the setup cost, during which nothing is captured, and the page did
+that work on the same main thread that renders the MJPEG feed. Now opened once
+by `mic()` and kept for the life of the tab, warmed on the first `pointerdown`
+anywhere so the first teach of a demo is not the one that misses its own word.
+
+Note what this is **not** evidence of: the 2.9 s of quiet at the front of that
+7.7 s clip is *captured* room noise, not a late start, so it does not measure the
+setup latency. The reason to keep the mic warm is structural, and the cost of
+being wrong about it is one clipped word.
+
+Two details worth keeping:
+
+- **`mic()` memoizes the promise, not `ctx`.** `ctx` is only assigned after three
+  awaits, so an `if (ctx) return` guard lets the warm-up listener and the first
+  press both through, and two worklet nodes pushing into one chunk list is the
+  audio recorded twice over. On failure it clears the memo so a retry is
+  possible.
+- **The `AudioContext` asks for 16 kHz.** That is Whisper's rate, so the browser
+  resamples instead of sending 3x the bytes *up* the same half-duplex Wi-Fi link
+  the feed is coming *down* — 740 KB became ~250 KB for that clip. Browsers that
+  ignore the option report their real rate in `ctx.sampleRate`, which is what the
+  WAV header is written from, so it stays honest either way. (Per spec an
+  unsupported rate *throws* rather than falling back, so there is no silent
+  wrong-rate path to worry about — only a mic that fails to open.)
+- **A kept mic needs the recovery the per-press version got for free.** Opening
+  it once means nothing re-opens it when it dies: a backgrounded tab suspends the
+  `AudioContext` (an incoming call does it on iOS), and the track ends outright
+  if permission is pulled or the input device changes. Either one records silence
+  behind a healthy-looking recording indicator until someone reloads — mid-demo,
+  on a phone. So `start()` resumes a non-running context inside the press (the
+  one place `resume()` is allowed), and `onended` clears the memo so the next
+  press opens fresh. `openMic()` closes the outgoing context on the way, or a
+  demo that loses the mic a few times hits the browser's live-context limit.
+
+The mic staying open means a permanent recording indicator in the browser. That
+is the price, and it is in the README.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -510,12 +713,20 @@ Useful reference numbers; re-measure before trusting them after any change.
   103 ms per `cap.read()`. This, not the GPU, caps the feed.
 - Whisper-base via onnx-asr on CPU: load ~2.7 s, **transcribe ~6 s** for a short
   utterance. Thread count barely moves it (5.9 s at 6 threads vs 6.5 s at 2).
+  Cost scales with clip length, and that dominates everything else here: 2.0 s of
+  audio costs 5.2 s, 7.7 s of audio costs **16.3 s**. Trimming silence is worth
+  more than any thread tuning — see "The voice path".
 - Nomic load ~4 s, then ~0.15 s per embed. CLIP vision embed ~0.16 s.
 - Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask.
   Add one thread for the key handler (see "UI responsiveness").
 - Same app as a systemd service, no desktop session: **2.3–2.5 GB / 19 threads**,
   i.e. no penalty for running headless. A clean `systemctl stop` takes 3–5 s, all
   of it the shard close. The desktop it replaces was holding ~1.5 GB.
+- MJPEG stream: composed frame is 1760x720, **183 KB at quality 85**, so the
+  feed costs **~13 Mbps** at the camera's 10 fps — by far the largest thing the
+  demo puts on the network. Was 37 Mbps before the duplicate-frame fix. The
+  hotspot (5 GHz, HT20) carries it with room; 2.4 GHz did not. See "Streaming
+  over the hotspot".
 - Score parity (must hold), from the rewritten `verify_scores.py`, which crops
   **with the mask** as the app does: same-object min 0.887 / median 0.920,
   different-object median 0.472 / max 0.611, margin +0.275. The older numbers
