@@ -283,6 +283,8 @@ journalctl -u l6-robot -f          # the robot's console output
 sudo systemctl restart l6-robot    # after editing code or .env
 ```
 
+There are three independent ways in — your LAN with the robot wired to the router, the robot's own hotspot, and a USB-C cable that needs no network at all — plus a serial console for when none of them answer. [REMOTE-ACCESS.md](REMOTE-ACCESS.md) covers all of them, how to work on the robot once you are in, and how to move it between Wi-Fi networks without stranding it.
+
 To get the robot back onto a real network for updates, plug in Ethernet, or `sudo nmcli con up "<your network>"` — the saved profiles are kept, just stopped from autoconnecting. Bring the hotspot back with `sudo nmcli con up l6-hotspot`.
 
 Two behaviours worth knowing before you debug them:
@@ -320,6 +322,7 @@ The second command measures what the robot *wants* to send, over loopback, with 
 | `robot/models.py` | Embedding and speech model setup |
 | `robot/config.py` | Per-camera settings, read from `.env` |
 | `deploy/` | `headless-setup.sh` and the systemd unit that make it an appliance |
+| `REMOTE-ACCESS.md` | Getting a shell on the headless unit, and moving it between Wi-Fi networks |
 | `testdata/` | Replay fixtures, plus `verify_scores.py` for calibration |
 
 Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.

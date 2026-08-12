@@ -70,13 +70,14 @@ HTML now" below.
   `main` as of 2026-08-12, as is the cert work under "Operational notes". Note
   the code merged before the operator confirmed the feel on the device; that
   confirmation is still outstanding.
-- PR #4 (the headless appliance work below) is **merged** into `main` as of
-  2026-08-12. It brought `deploy/`, `--advertise` and `--watchdog`.
-- The streaming fix ("Streaming over the hotspot") and the voice fixes ("The
-  voice path") are commit `bc04589` on `codex/hotspot-stream-and-voice`, pushed,
-  **no PR opened**. The UI work ("The panel is HTML now") is stacked on top of
-  it on `codex/html-panel`. Neither is on `main` yet. No new dependencies in
-  either.
+- PR #4 (the headless appliance described under "Headless appliance") is
+  **merged** into `main` as of 2026-08-12. As with #3, it merged before the
+  operator confirmed it on the device: **a cold boot with the desktop gone has
+  still not been proven.**
+- Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
+  and two pointers to it, no code. Documentation only — how to get a shell on the
+  headless unit over any of three independent routes, and how to move it between
+  Wi-Fi networks. The one machine change it records is that `tmux` was installed.
 - `robot.log` is untracked runtime output and is now covered by `*.log` in
   `.gitignore`. `.env` is gitignored too; `.env.example` is tracked and is the
   documentation for every per-camera knob.
@@ -342,7 +343,9 @@ neither would have shown up on the bench quickly.
 The unit goes in a case with no keyboard, screen, or peripherals, and demos in
 rooms with no usable network. So: **apply power, and it boots into the robot on
 its own access point.** Operator-facing instructions are in the README under
-"Headless Appliance"; keep the SSID, password and band quoted there in sync with
+"Headless Appliance", and getting a shell on it afterwards — three independent
+routes plus a serial console for when none of them answer — is `REMOTE-ACCESS.md`.
+Keep the SSID and password quoted in those two files in sync with
 `deploy/headless-setup.sh`, which is where they are defined, and the address in
 sync with both the script and the unit (see the knobs paragraph below). The band
 is 5 GHz for a measured reason — see "Streaming over the hotspot".
