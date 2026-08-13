@@ -305,6 +305,38 @@ class Robot:
         self.log(f'taught "{label[:18]}" -> image + text')
         return {"id": pid, "label": label, "transcript": transcript}
 
+    def confirm(self, label, frame=None):
+        """One tap on the orange guess: teach the attending crop as that name.
+
+        The maybe band shows "dylan? 0.87" — everything a teach needs is
+        already on screen: the crop (the attending track's) and the name (the
+        guess). Confirming skips the voice round-trip and its 6 s of Whisper.
+        The transcript IS the label, which is the bare-noun teach recall's
+        text search already handles ("Hat." scored 0.725 against the question
+        that mattered).
+
+        `label` is what the page displayed at tap time, verified against the
+        live guess before acting — the FORGET lesson: focus moves under a
+        finger already on its way down, and a tap meant for "dylan?" must not
+        teach whatever the panel switched to. Returns the teach result, or
+        None if the guess moved on (honest refusal, nothing written).
+
+        The track is labeled in place — the point just written IS this crop,
+        so the match is certain — which turns the box teal on the tap and
+        makes a second tap a no-op instead of a duplicate view. requery_now
+        still runs so score and thumb refresh at the next pass.
+        """
+        t = self.attention
+        if (t is None or t.label or not t.guess or t.crop is None
+                or t.guess.lower() != label.lower()):
+            return None
+        res = self.teach(t.crop, t.guess, frame=frame, box=t.box)
+        t.label = res["label"]
+        t.note = res["transcript"]
+        t.guess = None
+        t.requery_now()
+        return res
+
     # -- forget / ignore -------------------------------------------------------
 
     def forget(self, label):
@@ -374,23 +406,33 @@ class Robot:
         deleting it alone would leave the label's sightings behind in recall,
         describing an object the robot can no longer recognize.
 
-        The point must actually be one of this object's taught views, and that
-        is checked here rather than trusted: the id and the label arrive
-        together from a page that may have been looking at a stale list, and
-        two mistakes follow from believing it. A view already dropped from
-        another tab would count as "the last one" and forget the whole object
-        — sightings and all — on a press that asked to delete something that
-        was already gone. And a pid belonging to something else (a sighting,
-        another object's view) would be deleted while the log said otherwise.
+        Sightings are droppable through the same door now — the tab's cycle
+        shows them, and a bad auto-saved photo (a stale box, a hand over the
+        object) is as worth removing as a bad teach. Dropping a sighting
+        never cascades: only the last *taught* view takes the object with it.
+
+        The point must actually belong to this object, and that is checked
+        here rather than trusted: the id and the label arrive together from a
+        page that may have been looking at a stale list, and two mistakes
+        follow from believing it. A view already dropped from another tab
+        would count as "the last one" and forget the whole object —
+        sightings and all — on a press that asked to delete something that
+        was already gone. And a pid belonging to something else (another
+        object's view, an ignore point) would be deleted while the log said
+        otherwise.
         """
         ids = self.memory.taught_ids(label)
-        if pid not in ids:
-            return 0, False
-        if len(ids) <= 1:
-            return self.forget(label), True
-        self.memory.forget_point(pid)
-        self.log(f'dropped one view of "{label[:18]}"')
-        return 1, False
+        if pid in ids:
+            if len(ids) <= 1:
+                return self.forget(label), True
+            self.memory.forget_point(pid)
+            self.log(f'dropped one view of "{label[:18]}"')
+            return 1, False
+        if pid in self.memory.seen_ids(label):
+            self.memory.forget_point(pid)
+            self.log(f'dropped one sighting of "{label[:18]}"')
+            return 1, False
+        return 0, False
 
     def ignore(self, track, frame=None):
         """Dismiss an unknown so the robot stops offering it — clutter you

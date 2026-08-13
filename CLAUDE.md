@@ -69,8 +69,10 @@ The thirteen rounds, newest last — each heading below carries the full story:
     0.05 under the bar now draws an orange "hat? 0.87" box and panel state
     instead of a bare UNKNOWN; display only, the 0.90 decision is untouched.
     The every-press mic prompt turned out to be Chrome on iOS with the cert
-    untrusted; the README now routes the cert download through Safari. See
-    "The maybe band" below.
+    untrusted; the README now routes the cert download through Safari.
+    Same-day follow-ups: tapping the orange guess confirms it (a one-tap
+    teach), the card caption is one combined count, and DROP works on
+    sightings. See "The maybe band" below.
 
 ## Goal and constraints
 
@@ -1731,11 +1733,10 @@ through above.
 Sightings were only reachable through recall's answer card. `Memory.objects`
 now attaches each label's recent sightings (`last_sightings`, limit 8 — the
 same burst-collapse recall uses, so eight rows are eight occasions), and the
-card's tap-cycle walks taught views first, then sightings, captioned
-`view 1 of 2` vs `seen 1 of 8`. DROP THIS VIEW hides itself while a sighting
-shows (`display:none` toggled in `show()`): sightings are history, not
-taught memories, and the server would refuse the id anyway since
-`forget_view` checks `taught_ids`. Eight is a cap, not "all" — the operator
+card's tap-cycle walks taught views first, then sightings. (Two details
+here lasted one day: the split caption became one combined count, and DROP
+works on sightings too now — see round 15's follow-ups.) Eight is a cap,
+not "all" — the operator
 asked for all the views, and all *distinct occasions* is what makes sense: a
 mug sitting in view logs hundreds of near-identical bursts. FORGET still
 deletes sightings with the object, unchanged.
@@ -1775,7 +1776,9 @@ decision**, and that distinction is the whole design.
   writes no sighting, cannot be forgotten by the F key, and is still
   checked against the ignore list. `Robot.forget` strips matching guesses
   off live tracks like it strips labels, so a deleted name doesn't linger
-  a requery beat in orange.
+  a requery beat in orange. (The one sanctioned act on a guess arrived the
+  same day: the operator can *confirm* it — see the follow-ups below —
+  which is a teach, not a recognition.)
 
 Why this does not reopen the 0.88 question: the round-8 measurement stands
 — acting at 0.88 buys 2 recognitions and 5 mislabels, and the 0.85–0.90
@@ -1795,14 +1798,53 @@ installs profiles Safari downloads. README's cert steps now say to fetch
 (all iOS browsers are WebKit), which is what makes Chrome start remembering
 the mic grant. No code: there is nothing an app can do about it.
 
-Verified the same way as round 14, against scratch shards only: recognize's
-band edges (0.95 hit / 0.87 guess / 0.80 neither), a guessed track through
-the real `process_frame` (unlabeled, teachable, no sighting, orange
-`draw_feed` path renders), forget stripping a live guess, and the browser
-probe asserting the orange panel state ("hat? — hold TEACH", orange chip
-background) against a stub `/state`. Replay verdicts and score parity
-unchanged (the band never changes a verdict — replay prints label-or-
-UNKNOWN, and guesses are not labels).
+### Follow-ups from first use, same day
+
+Three operator reports after driving rounds 14–15 from the phone:
+
+- **The card's caption is one combined count now** — `3 of 10 · seen ·
+  Aug 13, 10:00` — instead of restarting at `seen 1 of 8` after `view 2 of
+  2`, which read as two separate lists inside one tap-cycle.
+- **Tapping the orange guess confirms it** (*"does clicking on 'Dylan?'
+  basically teach it?"* — it does now). The panel label reads `dylan? — tap
+  to confirm`; the tap POSTs `/confirm` with the **displayed** label, and
+  `Robot.confirm` re-verifies it against the live guess before acting — the
+  FORGET lesson: focus moves under a finger already on its way down, and a
+  tap meant for "dylan?" must not teach whatever the panel switched to. On
+  a match it calls the ordinary `Robot.teach` with the attending crop and
+  the guess as the transcript (a bare-noun teach, which recall's text
+  search already handles), then labels the track **in place** and clears
+  the guess — the point just written is this exact crop, so the match is
+  certain; the box turns teal on the tap and a double-tap is a no-op
+  instead of a duplicate view. `App.confirm` warms encoders OUTSIDE the
+  lock like the voice path, so a first-of-session Nomic load cannot stall
+  the detect thread into `DEAD_SECONDS`. Confirming is a *teach* — the
+  no-acting-on-guesses rule above is about the robot deciding alone; this
+  is the operator deciding.
+- **DROP works on sightings too** (*"we should be able to drop views from
+  the views that are automatically saved"*). `Robot.forget_view` now
+  accepts a pid from either list, still verified against the shard:
+  `taught_ids` first (unchanged semantics, last-view cascade included),
+  then `Memory.seen_ids` — a sighting drop deletes exactly one point and
+  never cascades. The button now shows on every entry except an object's
+  last taught view, where dropping would mean forgetting and FORGET is the
+  honest button.
+
+### Verified
+
+Same discipline, scratch shards only. `bench/test_maybe.py`: band edges
+(0.95 hit / 0.87 guess / 0.80 neither), a guessed track through the real
+`process_frame` (unlabeled, teachable, no sighting, orange pixels out of
+`draw_feed`), forget stripping a live guess, ignore still winning inside
+the band. `bench/test_confirm_drop.py`: confirm refusing a label the panel
+never showed, teaching under the guessed name, in-place labeling, double-
+tap no-op, sighting drops (stale id and wrong-label refusals, cascade only
+on the last taught view). `bench/stub_probe.py` in headless firefox against
+a stub server: combined-count captions, DROP visible on sightings, the
+orange tappable panel ("hat? — tap to confirm"), `/confirm` carrying the
+displayed label, an armed DROP on a sighting posting its id. Replay
+verdicts and score parity unchanged throughout (the band never changes a
+verdict — replay prints label-or-UNKNOWN, and guesses are not labels).
 
 ## Measured baselines on this board
 

@@ -351,17 +351,22 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     if (url && n.dataset.url !== url) { n.dataset.url = url; n.src = url; }
   };
 
-  let shownSeq = null, statusAt = 0, shownCard = '';
+  let shownSeq = null, statusAt = 0, shownCard = '', curGuess = null;
   function render(s) {
     $('count').textContent = s.count + ' memories';
     $('where').textContent = s.where ? 'here: ' + s.where : '';
     const f = s.focus;
     const known = f && f.label;
     // three states: recognized (teal), a near-miss guess (orange, "hat?" --
-    // close to the bar but under it, still teachable), or unknown (red)
+    // close to the bar but under it, still teachable), or unknown (red).
+    // A guess is tappable: confirming teaches this crop as that name, no
+    // voice needed -- the crop and the name are both already on screen.
+    curGuess = f && !f.label ? f.guess : null;
     $('label').textContent = f ? (f.label ||
-        (f.guess ? f.guess + '? \\u2014 hold TEACH' : 'UNKNOWN \\u2014 hold TEACH'))
+        (curGuess ? curGuess + '? \\u2014 tap to confirm'
+                  : 'UNKNOWN \\u2014 hold TEACH'))
                                : 'looking\\u2026';
+    $('label').style.cursor = curGuess ? 'pointer' : '';
     $('label').style.background =
       f ? (known ? 'var(--teal)' : f.guess ? 'var(--orange)' : 'var(--red)')
         : 'var(--dim)';
@@ -454,6 +459,13 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       await new Promise(r => setTimeout(r, 250));
     }
   })();
+  // Confirming a guess sends the label the panel DISPLAYED, and the server
+  // re-checks it against the live guess before teaching -- the FORGET
+  // lesson: focus can move between deciding to tap and tapping.
+  $('label').onclick = () => {
+    if (curGuess) fetch('/confirm?label=' + encodeURIComponent(curGuess),
+                        { method: 'POST' }).catch(() => {});
+  };
   // The live crop is the only part that needs its own request. Once a second
   // is plenty for a side-by-side comparison; the video is the live view.
   setInterval(() => { $('thumbB').src = '/crop.jpg?' + Date.now(); }, 1000);
@@ -652,13 +664,15 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       const v = entries[i], taught = i < o.views.length;
       pic.src = '/thumb?f=' + encodeURIComponent(v.scene || v.thumb || '');
       said.textContent = v.transcript ? '\\u201c' + v.transcript + '\\u201d' : '';
-      cap.textContent = (taught
-          ? 'view ' + (i + 1) + ' of ' + o.views.length
-          : 'seen ' + (i - o.views.length + 1) + ' of ' + sights.length)
-        + ' \\u00b7 ' + v.when + (v.where ? ' \\u00b7 ' + v.where : '');
-      // DROP acts on taught views only: a sighting is history, and the
-      // server would refuse its id anyway (forget_view checks taught_ids)
-      drop.style.display = taught ? '' : 'none';
+      // one running count over the whole cycle; the word says which kind
+      cap.textContent = (i + 1) + ' of ' + entries.length +
+        ' \\u00b7 ' + (taught ? 'taught' : 'seen') +
+        ' \\u00b7 ' + v.when + (v.where ? ' \\u00b7 ' + v.where : '');
+      // Sightings are droppable too (a stale-box photo is worth removing);
+      // only a taught view hides the button when it is the object's last
+      // one, because dropping that forgets the whole object and FORGET is
+      // the honest button for it.
+      drop.style.display = (taught && o.views.length < 2) ? 'none' : '';
     };
     // Tap the picture to walk the cycle. Re-teaching adds a view rather than
     // replacing it -- that is what makes recognition work from more than one
@@ -676,9 +690,9 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
                 renameBtn(o.label, name),
                 armedBtn('FORGET', 'del', () =>
                   post('/forget?label=' + encodeURIComponent(o.label))));
-    // only when there is more than one: with a single view, dropping it and
-    // forgetting the object are the same act, and one button for it is clearer
-    if (o.views.length > 1) foot.append(drop);
+    // always in the row now that sightings are droppable; show() hides it on
+    // the one case where dropping means forgetting (a single taught view)
+    foot.append(drop);
     const body = el('div', null, 'body');
     body.append(name, said, cap, foot);
     card.append(pic, body);
@@ -1143,6 +1157,12 @@ class StreamHandler(BaseHTTPRequestHandler):
                     {"label": label, "to": to,
                      "n": self.app.rename(label, to)}
                     if label and to else {"n": 0}, 200 if label and to else 400)
+            elif self.path.startswith("/confirm"):
+                # tap on the orange "dylan?" — teach that crop as that name
+                label = self._query("label")
+                self._send_json(self.app.confirm(label)
+                                if label else {"ok": False},
+                                200 if label else 400)
             elif self.path.startswith("/unignore"):
                 # the pid travels as a string (point ids exceed 2^53, see
                 # _view_json); 0 on a malformed request misses harmlessly
@@ -1379,6 +1399,29 @@ class LiveApp:
             ok = self.robot.unignore(pid)
         self.banner = "tracking that again" if ok else "that isn't ignored"
         return ok
+
+    def confirm(self, label):
+        """Tap on the orange guess: teach the attending crop as that name.
+
+        Encoders warm OUTSIDE the lock, exactly like the voice path — the
+        first action of a session pays ~7 s of model loads, and paying them
+        under the lock stalls the detect thread long enough to start killing
+        tracks. Warm sessions pay ~0.3 s of embeds.
+        """
+        self.banner = "thinking..."
+        models.warm_encoders()
+        with self.lock:
+            res = self.robot.confirm(label, frame=self.latest)
+            if res:
+                self.mem_count = self.robot.memory.count()
+        if res is None:
+            # the guess moved on between the paint and the tap — refuse
+            # honestly rather than teach whatever holds the panel now
+            self.banner = "nothing to confirm"
+            return {"ok": False}
+        self.card = ("taught", res)
+        self.banner = f'taught: "{res["label"]}"'
+        return {"ok": True, "label": res["label"]}
 
     def set_where(self, place):
         """Update the robot's location, from the tab. Under the lock like the

@@ -235,6 +235,20 @@ class Memory:
             return [p.id for p in records
                     if (p.payload.get("label") or "").lower() == label.lower()]
 
+    def seen_ids(self, label):
+        """Point ids of every sighting wearing this label, case-folded —
+        what makes one auto-saved photo individually droppable from the tab."""
+        from qdrant_edge import ScrollRequest
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="seen")),
+                ])))
+            return [p.id for p in records
+                    if (p.payload.get("label") or "").lower() == label.lower()]
+
     def forget_point(self, pid):
         """Delete exactly one point — one taught view, not the whole object."""
         with self._lock:
