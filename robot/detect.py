@@ -41,7 +41,16 @@ MAX_DET = 64
 # seated person at desk distance is 0.072-0.078 of the frame, comfortably
 # inside the cap, so no calibration change was needed. A face filling the frame
 # is not — back off, or raise DETECT_MAX_AREA and accept more phantom boxes.
-MIN_AREA = 0.0008
+# The floor was a bare 0.0008 until it turned out to be the one band edge
+# with no knob, which is also the one an operator wants to move when small
+# far-away clutter keeps taking the unknown box. Area scales as the square of
+# apparent size, so the step from 0.0008 to 0.001 is ~12% wider, not 25%.
+#
+# .env only, with no matching CLI flag: --conf and --max-area exist because
+# they are the two you A/B against a live scene, and a third flag for the
+# floor would need threading through Detector and Robot for a number nobody
+# sweeps.
+MIN_AREA = config.DETECT_MIN_AREA   # per-camera, see .env
 MAX_AREA = config.DETECT_MAX_AREA   # per-camera, see .env (--max-area)
 STABLE_FRAMES = 3
 REQUERY_SECONDS = 2.0

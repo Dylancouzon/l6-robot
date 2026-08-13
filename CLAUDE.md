@@ -73,6 +73,14 @@ The thirteen rounds, newest last — each heading below carries the full story:
     Same-day follow-ups: tapping the orange guess confirms it (a one-tap
     teach), the card caption is one combined count, and DROP works on
     sightings. See "The maybe band" below.
+16. **"Teaching and ignoring are a tad slow"** — and the 6 s teach floor
+    this file twice told people not to chase was **half language
+    auto-detection**, running the whole Whisper graph a second time.
+    Naming the language and giving the ASR session four threads took
+    release→answer from ~6 s to **1.90 s**, with no cost to the feed.
+    IGNORE now clears the box on the press instead of at the next detect
+    pass. `DETECT_MIN_AREA` became a knob and went up ~12% in apparent
+    size. See "Two Whispers per utterance" below.
 
 ## Goal and constraints
 
@@ -101,10 +109,11 @@ The thirteen rounds, newest last — each heading below carries the full story:
   0.88 on measurement, which is the part to read before anyone tries it
   again.
 - Branch: `codex/persistent-ignore-and-sightings` (PR #11), off `main`:
-  round 14 — "The prompt, the clutter that came back, and the photos the
-  tab couldn't show" below. No new dependencies; one new payload kind
-  (`ignored`), additive to existing shards. Deployed and serving on the
-  unit since 2026-08-13.
+  rounds 14–16 — "The prompt, the clutter that came back, and the photos the
+  tab couldn't show", "The maybe band", and "Two Whispers per utterance"
+  below. No new dependencies; one new payload kind (`ignored`) and one new
+  `.env` knob (`DETECT_MIN_AREA`), both additive to existing shards and
+  configs. Deployed and serving on the unit since 2026-08-13.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -975,7 +984,8 @@ that `da92caa` made "thinking..." *legible* — the same text used to be drawn
 ~100 px wide into the video. "It used to not do that" is true of the sign, not
 the duration. Do not go looking for a regression here again; the first-teach
 load has since been moved under the button hold (see "Recognition quality
-review"), and the steady 6 s is transcription's floor on this CPU.
+review"), and the steady 6 s was transcription's cost on this CPU — ~~floor~~,
+as round 16 showed by halving it twice over; it is ~1.9 s now.
 
 ### Two hazards found and deliberately left alone
 
@@ -1009,15 +1019,24 @@ A full review pass (2026-08-12, ninth round) on "teaching still takes some time
 to register, recognition works okay but not great". Everything here was
 measured on the live box or the live shard before it was changed.
 
-### Teach latency: 6 s is the floor, and it is Whisper
+### Teach latency: 6 s is the floor, and it is Whisper (it was neither — see round 16)
 
 From the journal, release→"taught" is a flat 6 s whether the trimmed speech was
 2.2 s or 1.4 s. That is whisper-base on CPU plus ~0.3 s of embeds and the shard
 write. The GPU option was checked and closed: this venv's onnxruntime 1.27.0 is
 the CPU-only build (`get_available_providers()` = CPU/Azure), so GPU Whisper
 means sourcing a Jetson ORT-GPU wheel — heavy machinery against a pinned stack,
-for one demo beat. **Do not chase the 6 s.** Threads buy 0.5 s at best (already
-measured), and a smaller Whisper mishears more.
+for one demo beat. ~~**Do not chase the 6 s.** Threads buy 0.5 s at best
+(already measured), and a smaller Whisper mishears more.~~
+
+> **That instruction was wrong, and it cost three rounds.** The 6 s was not
+> Whisper's floor: half of it was onnx-asr detecting the language by running
+> the entire beam-search graph — encoder included — a second time. Naming the
+> language removed it, and threads bought far more than 0.5 s once the work
+> being threaded was halved. Round 16 measures 1.90 s where this paragraph
+> promised 6. Read "Two Whispers per utterance" below. The lesson is not about
+> Whisper: **"already measured" was doing the work of a profile here**, and
+> nobody had looked at what the library does per call.
 
 What WAS cut: the first voice action of a session paid ~7 s of model loads
 (Whisper ~2.7 s + Nomic ~4 s, measured 7.1 s together) *after* the finger
@@ -1864,6 +1883,111 @@ displayed label, an armed DROP on a sighting posting its id. Replay
 verdicts and score parity unchanged throughout (the band never changes a
 verdict — replay prints label-or-UNKNOWN, and guesses are not labels).
 
+## Two Whispers per utterance, and an IGNORE that waited for a detect pass
+
+Operator report (2026-08-13, sixteenth round): *"teaching and ignoring are a
+tad slow"*, plus a request to raise the minimum detected object size ~10%.
+Three findings, and the first one overturns a "settled" number this file had
+defended twice.
+
+### The teach floor was half language detection
+
+`onnx_asr`'s Whisper here is the **beam-search export**: one ONNX graph that
+contains the encoder *and* the decoder, driven by
+`self._model.run(["sequences"], {"input_features": ..., "decoder_input_ids":
+...})`. And `recognize_batch` calls that graph **twice** when no language is
+given — once with `max_length=3` to read the language token off the front,
+once for the transcript. The short call is not short: it re-runs the encoder.
+So every teach and every ask paid for two full passes over a 74 M-parameter
+model to learn something the demo script already knows.
+
+Measured on a real 2.1 s utterance off the live unit
+(`/tmp/l6-utterance.wav`, "Smartphone."), standalone, before touching the app:
+
+| | 2 threads | 4 threads |
+|---|---|---|
+| auto-detect language (what shipped) | 5.37 s | 3.20 s |
+| `language="en"` | **2.71 s** | **1.65 s** |
+
+Byte-identical transcript in all four. `models.LANGUAGE = "en"` is the whole
+fix, and it also closes a real failure the journal caught: auto-detection put
+one English teach into Cyrillic and stored the object as `делан`.
+
+`ASR_THREADS = 4` is the second half, and it is a **separate constant from
+`ENCODER_THREADS`** on purpose. Two threads is right for Nomic and CLIP —
+the detect thread calls those forever, on its own cadence, beside YOLO. It is
+wrong for Whisper, which runs only while a human is waiting and never beside
+another encoder; while it runs, YOLO is on the GPU and the frame pump is
+inside a driver call. Verified in the live app, not reasoned about
+(`gaps.py`, session scratchpad — reads `/stream` and times every frame
+boundary while firing a voice action over HTTP):
+
+| | release → answer | frame gaps during it |
+|---|---|---|
+| before this round | ~6 s (journal) | — |
+| `language="en"`, 2 threads | 2.82 s | med 102 ms, max 124 ms, no stall >400 ms |
+| `language="en"`, 4 threads | **1.90 s** | med 102 ms, max 132 ms, no stall >400 ms |
+
+i.e. the feed cannot tell the difference, and idle is 102 ms too. **Do not
+raise it past 4 without re-running that harness**: the board has six cores and
+the pump needs one. The cold first action of a session is unchanged (4.58 s,
+two GIL stalls over 400 ms) — that is the documented model-load cost under
+"Recognition quality review", and it is not what this round touched.
+
+Rejected, measured: **int8 whisper-base** (`quantization="int8"`, which the
+same HF repo ships). It is faster still — 0.98 s at 4 threads — but it is the
+only change here that moved the words: `'Smartphone.'` became `'smartphone'`
+and, with auto-detect, `'Smart phone'`. This repo pins its model stack against
+a course, and the ASR's whole job is hearing a bare noun correctly, which is
+already its weakest point ("La-caw"). Not worth 0.7 s. Reopen only with a WER
+comparison over a set of real captures, not one clip.
+
+### IGNORE was fast and looked slow
+
+The shard work behind a dismissal is **~40 ms** (upsert+flush 32 ms, thumb
+write 5 ms, benchmarked on a copy of the live shard), and the app lock it
+waits for costs a median of 45 ms / p90 282 ms (40 samples, live). None of
+that is a second. What made it feel slow is that **the box and the panel are
+decided once per detect pass**: `Robot.ignore` mutated the detector, and the
+`self.tracks` list the frame pump draws from — and `Robot.attention` /
+`Robot.teachable`, which `/state` reads — kept the dismissed object until the
+next pass finished. Up to half a second of a press that visibly did nothing.
+
+So `Robot.ignore` now clears `attention`/`teachable` when they are the track
+being dismissed, and the key handler drops it from `LiveApp.tracks` (assigning
+a new list — the pump reads that attribute without the lock). Same shape as
+`Robot.forget` stripping labels itself instead of waiting for a requery. The
+box now goes on the next composed frame, ~0.1 s.
+
+Not changed, deliberately: the panel still updates on `/state`'s 4 Hz poll, so
+the *text* can trail the box by up to 250 ms. That is the page's cadence, not
+this path's, and it is the same for every other action.
+
+### DETECT_MIN_AREA is a knob now
+
+`MIN_AREA` was the one edge of the detector's size band with no `.env` entry,
+next to `DETECT_CONF` and `DETECT_MAX_AREA` which have both. It is
+`DETECT_MIN_AREA` now, default **0.001**, up from a hardcoded 0.0008.
+
+Say the size change in the right units: this is an **area** fraction, so it
+goes as the square of how big a thing looks — 0.0008 → 0.001 is about **12%
+wider**, not 25%. No CLI flag: `--conf` and `--max-area` exist because they
+are the two anyone sweeps against a live scene, and a third would need
+threading through `Detector` and `Robot` for a number that is set once.
+
+### Verified
+
+Score parity byte-identical (same-object min 0.887 / med 0.920, different med
+0.472 / max 0.611, margin +0.275) — expected, since nothing here touches the
+crop pipeline, but it is the check this file requires after anything near
+detection. Headless replay over `testdata/` A/B'd at **both** 0.0008 and
+0.001: identical verdicts, so the bundled photos do not exercise the new
+floor — the change is only measurable on a live scene, and only against small
+far-away clutter. A stub test on a scratch shard covers the ignore change
+(attention and teachable cleared, track dropped, tid blocked, point persisted,
+and an unrelated ignore leaving the panel alone). The end-to-end numbers above
+are from the live service on the unit.
+
 ## Measured baselines on this board
 
 Useful reference numbers; re-measure before trusting them after any change.
@@ -1872,11 +1996,16 @@ Useful reference numbers; re-measure before trusting them after any change.
   Seconds per frame on CPU, so CUDA matters.
 - Camera (Arducam 1080P on USB 2.0): negotiates **YUYV 1280x720 at 10 fps**,
   103 ms per `cap.read()`. This, not the GPU, caps the feed.
-- Whisper-base via onnx-asr on CPU: load ~2.7 s, **transcribe ~6 s** for a short
-  utterance. Thread count barely moves it (5.9 s at 6 threads vs 6.5 s at 2).
-  Cost scales with clip length, and that dominates everything else here: 2.0 s of
-  audio costs 5.2 s, 7.7 s of audio costs **16.3 s**. Trimming silence is worth
-  more than any thread tuning — see "The voice path".
+- Whisper-base via onnx-asr on CPU: load ~2.7 s, **transcribe ~1.7 s** for a
+  short utterance — with `LANGUAGE = "en"` and `ASR_THREADS = 4`. It was ~5.4 s
+  at 2 threads with the language auto-detected, which is the number the rest of
+  this file was written against; halve any older figure here. Cost still scales
+  with clip length, and that still dominates: a 7.7 s hold full of silence cost
+  **16.3 s** at the old settings, and trimming silence is still worth more than
+  any thread tuning — see "The voice path" and "Two Whispers per utterance".
+- A whole voice action, release to answer, warm session: **1.90 s** measured
+  through the live app (was ~6 s). Add ~0.4 s for a teach's embeds and shard
+  write. The first action of a session is ~4.6 s: model loads, not speech.
 - Nomic load ~4 s, then ~0.15 s per embed. CLIP vision embed ~0.16 s.
 - Live app: 2.3 GB / 18 threads at startup; 3.4 GB / 34 threads after one ask;
   drifts to ~4.2 GB over a day of interactions (shard, caches — not a leak
