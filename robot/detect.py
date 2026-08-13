@@ -116,6 +116,8 @@ class Track:
         self.crop_q = 0.0
         self.salience = 0.0    # size x centrality: what the robot attends to
         self.label = None      # from memory, never from the detector
+        self.guess = None      # nearest taught label just under the bar —
+                               # display only, never recognition
         self.note = None       # the taught transcript, recalled on match
         self.thumb = None      # the matched taught view, shown next to the live crop
         self.score = 0.0
@@ -159,17 +161,20 @@ class Detector:
         else:
             self.device = "cpu"
         self.tracks = {}
-        # unknowns the operator dismissed ("don't track this"), tid -> a record
-        # the memory tab can show and undo. A bare set of ids would be enough
-        # to suppress them, but then a mis-tap is invisible and permanent for
-        # the session, which is the same complaint FORGET had.
+        # unknowns the operator dismissed ("don't track this"), tid -> a
+        # small block record. This is only the per-frame gate: the durable
+        # record of a dismissal is a kind="ignored" point in the shard (see
+        # Memory.ignore), which is what the memory tab lists and what
+        # re-suppresses the same-looking object after a restart, when these
+        # ids mean nothing. Each block carries the pid of the point it came
+        # from, so deleting that point can lift its blocks too (unblock).
         #
         # Copy-on-write: mutators REPLACE the dict rather than editing it in
-        # place. Both mutators run under the app's live-state lock (Q on the
-        # key thread, /unignore on an HTTP thread), so writes never race each
-        # other — and a reader that grabs the reference iterates a snapshot
-        # that can no longer change. That is what lets /ignored answer without
-        # the app lock, which the detect thread holds for a whole YOLO pass.
+        # place. All mutators run under the app's live-state lock (Q on the
+        # key thread, /unignore on an HTTP thread, the requery re-suppression
+        # on the detect thread), so writes never race each other — and a
+        # reader that grabs the reference iterates a snapshot that can no
+        # longer change.
         self._ignored = {}
 
     def warm(self):
@@ -178,32 +183,23 @@ class Detector:
             self.model.predict(dummy, device=self.device, imgsz=IMGSZ,
                                verbose=False)
 
-    def ignore(self, tid, thumb=None):
-        """Stop tracking one object for the rest of the session — an unknown
-        the operator doesn't want to teach. Sticky per track id, so it stays
-        dismissed frame after frame however the classifier flickers.
-
-        `thumb` is only there so the memory tab can show what was dismissed;
-        nothing in the detector reads it."""
+    def ignore(self, tid, pid=None):
+        """Stop tracking one object — an unknown the operator doesn't want to
+        teach, or one that matched a persisted dismissal at requery. Sticky
+        per track id, so it stays dismissed frame after frame however the
+        classifier flickers. `pid` names the shard point behind the block."""
         ignored = dict(self._ignored)  # mutate the copy, then publish it
-        ignored[tid] = {"tid": tid, "thumb": thumb, "ts": time.time()}
+        ignored[tid] = {"tid": tid, "pid": pid}
         self._ignored = ignored
         self.tracks.pop(tid, None)
 
-    def unignore(self, tid):
-        """Undo one ignore. The object comes back on its own if the tracker
-        still holds that id, and otherwise the next time it is proposed under
-        a new one — either way there is nothing to restore here, because an
-        ignored track carries no memory state."""
-        if tid not in self._ignored:
-            return False
-        self._ignored = {k: v for k, v in self._ignored.items() if k != tid}
-        return True
-
-    def ignored(self):
-        """What has been dismissed this session, newest first."""
-        return sorted(self._ignored.values(), key=lambda d: d["ts"],
-                      reverse=True)
+    def unblock(self, pid):
+        """Lift every block that came from one deleted ignore point. The
+        object comes back on its own — a blocked track carries no state to
+        restore: if the tracker still holds an id it resumes at the next
+        pass, and otherwise the object is re-proposed under a new one."""
+        self._ignored = {k: v for k, v in self._ignored.items()
+                         if v.get("pid") != pid}
 
     def reset(self):
         self.tracks.clear()

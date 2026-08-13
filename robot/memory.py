@@ -34,6 +34,25 @@ from qdrant_edge import (
 # any change to the encoders or the crop pipeline — it prints the knee.
 RECOGNIZE_THRESHOLD = config.RECOGNIZE_THRESHOLD
 
+# The "maybe" band under the bar: a nearest-taught score within this margin
+# of the threshold is surfaced as a GUESS — an orange box saying "hat?" —
+# instead of a bare UNKNOWN. Display only, and that is load-bearing: nothing
+# recognizes, logs a sighting, or can be forgotten off a guess, so this does
+# NOT reopen the 0.90 → 0.88 move that was measured and refused (see
+# CLAUDE.md, "Objects came and went on a static scene"). The band is where
+# promiscuous crops live — the mirror read 0.86–0.90 against taught objects
+# — which is exactly why showing it beats acting on it: the operator sees
+# "hat? 0.87" on a hat that needs another taught view, and sees the same
+# chip on a mirror and learns what the bar is for. Relative to the
+# threshold, not absolute, so a recalibrated camera keeps a sane band.
+MAYBE_MARGIN = 0.05
+
+# One "occasion" of being seen: sightings of a label closer together than
+# this are one burst, shown as one row (last_sightings) and deleted as one
+# unit (forget_sighting_burst). Named once because those two MUST agree —
+# a display window wider than the delete window resurrects "deleted" rows.
+SIGHTING_APART = 600
+
 CONFIG = EdgeConfig(
     vectors={
         "text": EdgeVectorParams(size=768, distance=Distance.Cosine),
@@ -222,6 +241,20 @@ class Memory:
             return [p.id for p in records
                     if (p.payload.get("label") or "").lower() == label.lower()]
 
+    def seen_ids(self, label):
+        """Point ids of every sighting wearing this label, case-folded —
+        what makes one auto-saved photo individually droppable from the tab."""
+        from qdrant_edge import ScrollRequest
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="seen")),
+                ])))
+            return [p.id for p in records
+                    if (p.payload.get("label") or "").lower() == label.lower()]
+
     def forget_point(self, pid):
         """Delete exactly one point — one taught view, not the whole object."""
         with self._lock:
@@ -240,6 +273,73 @@ class Memory:
                 "where": self.where,
             },
         )
+
+    def ignore(self, image_vec, thumb=None, ts=None):
+        """Persist one dismissal: the ignored crop's vector, image only.
+
+        This is what makes IGNORE survive a restart. A dismissal used to live
+        as a track id in the detector, and track ids restart from 1 every run,
+        so there was nothing to reload — every power cut brought all the
+        clutter back. The vector is the only durable name the object has:
+        after a restart the same-looking thing is re-suppressed the first time
+        it is embedded (see Robot.process_frame), exactly the way recognition
+        re-finds a taught object.
+        """
+        return self._upsert(
+            {"image": image_vec},
+            {
+                "kind": "ignored",
+                "ts": ts or time.time(),
+                "thumb": thumb,
+                "where": self.where,
+            },
+        )
+
+    def unignore(self, pid):
+        """Delete one ignored point. Verified against the shard first, like
+        forget_view: the id arrives from a page that may be stale, and a pid
+        belonging to something else (a sighting, a taught view) must not be
+        deletable through this door."""
+        with self._lock:
+            if pid not in [r.id for r in self.ignored()]:
+                return False
+            self.shard.update(UpdateOperation.delete_points([pid]))
+            self.shard.flush()
+            return True
+
+    def ignored(self):
+        """Every persisted dismissal, newest first — the tab's IGNORED list."""
+        from qdrant_edge import ScrollRequest
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="ignored")),
+                ])))
+        records.sort(key=lambda r: r.payload.get("ts") or 0, reverse=True)
+        return records
+
+    def match_ignored(self, image_vec):
+        """Nearest ignored crop vs the same threshold recognition uses.
+        Returns the hit or None. Only consulted for tracks that did NOT match
+        a taught object (see Robot.process_frame): a taught label always
+        beats an ignore, so a degenerate ignored crop — the blank/reflective
+        kind that matches broadly — can at worst hide unknown clutter, never
+        something that was deliberately taught."""
+        with self._lock:
+            hits = self.shard.query(QueryRequest(
+                query=Query.Nearest(image_vec, using="image"),
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="ignored")),
+                ]),
+                limit=1,
+                with_payload=True,
+            ))
+        if hits and hits[0].score >= self.threshold:
+            return hits[0]
+        return None
 
     # -- reads ----------------------------------------------------------------
 
@@ -294,12 +394,32 @@ class Memory:
                 # re-teach just wrote
                 g["label"] = g["views"][0].get("label") or g["label"]
                 g["seen"] = self.count_label(g["label"])
+                # the sightings too — the pictures the robot took on its
+                # own, which recall answers with. Until these were here,
+                # "when did you last see dylan" showed photos the memory tab
+                # had no way to reach. Same burst-collapse as recall
+                # (last_sightings), so each row is a distinct occasion — and
+                # UNCAPPED, deliberately: this list is what DROP works
+                # through, and a cap turns deletion invisible (drop one of
+                # 40 occasions behind a cap of 8 and the 9th slides in — the
+                # counter never moves, which reads as a delete that did
+                # nothing; that shipped, and the operator caught it in a
+                # day). The rows are dicts of payload + id; pictures load
+                # only when shown, so a long-lived object costs JSON bytes
+                # here, not image fetches.
+                g["sightings"] = [dict(r.payload, id=r.id) for r in
+                                  self.last_sightings(g["label"], limit=None)]
                 out.append(g)
             out.sort(key=lambda g: g["views"][0].get("ts") or 0, reverse=True)
             return out
 
     def recognize(self, image_vec):
-        """Nearest taught view vs the threshold. Returns (hit|None, score)."""
+        """Nearest taught view vs the threshold.
+
+        Returns (hit|None, score, guess): `guess` is the nearest taught label
+        when the score lands just under the bar (within MAYBE_MARGIN), and is
+        for display only — the caller must not treat a guess as recognition.
+        """
         with self._lock:
             hits = self.shard.query(QueryRequest(
                 query=Query.Nearest(image_vec, using="image"),
@@ -311,11 +431,13 @@ class Memory:
                 with_payload=True,
             ))
         if not hits:
-            return None, 0.0
+            return None, 0.0, None
         top = hits[0]
         if top.score >= self.threshold:
-            return top, top.score
-        return None, top.score
+            return top, top.score, None
+        if top.score >= self.threshold - MAYBE_MARGIN:
+            return None, top.score, top.payload.get("label")
+        return None, top.score, None
 
     def best_taught(self, text_vec):
         """The taught object whose TRANSCRIPT best matches a question —
@@ -341,9 +463,50 @@ class Memory:
             ))
         return hits[0] if hits else None
 
-    def last_sightings(self, label, limit=3, apart=600):
+    def forget_sighting_burst(self, pid, apart=None):
+        """Delete one sighting AND the burst it stands for. Returns how many.
+
+        The tab and recall both show burst-collapsed rows (see
+        last_sightings): one photo represents every sighting of that label
+        within `apart` seconds behind it. Deleting only the shown point
+        therefore does nothing visible — the next frame of the same burst,
+        near-identical and seconds older, slides into its slot. Measured on
+        a copy of the live shard: dropping hat's newest row promoted a frame
+        151 s older from the same burst, same count, same-looking photo —
+        reported as "dropping a view doesn't work". So the unit of deletion
+        is the unit of display: the burst.
+
+        The label comes from the point itself, not the caller, so this can
+        only ever delete sightings of the object the tapped photo actually
+        belongs to. `apart` defaults to the same window last_sightings
+        collapses with — the two must agree or the deleted burst is not the
+        shown burst.
+        """
+        from qdrant_edge import ScrollRequest
+        apart = SIGHTING_APART if apart is None else apart
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="seen")),
+                ])))
+            target = next((r for r in records if r.id == pid), None)
+            if target is None:
+                return 0
+            label = (target.payload.get("label") or "").lower()
+            ts = target.payload.get("ts") or 0
+            ids = [r.id for r in records
+                   if (r.payload.get("label") or "").lower() == label
+                   and ts - apart < (r.payload.get("ts") or 0) <= ts]
+            self.shard.update(UpdateOperation.delete_points(ids))
+            self.shard.flush()
+            return len(ids)
+
+    def last_sightings(self, label, limit=3, apart=None):
         """The newest sightings of one object, newest first and at least
-        `apart` seconds between rows — where it was, as distinct occasions.
+        `apart` (default SIGHTING_APART) seconds between rows — where it
+        was, as distinct occasions.
 
         A scroll and a sort, not a vector search: once the object is chosen,
         "where did I leave it" is a question about time, and the
@@ -359,6 +522,7 @@ class Memory:
         makes the second and third rows carry any information.
         """
         from qdrant_edge import ScrollRequest
+        apart = SIGHTING_APART if apart is None else apart
         with self._lock:
             records, _ = self.shard.scroll(ScrollRequest(
                 limit=10000, with_payload=True,
@@ -375,7 +539,7 @@ class Memory:
                         - (r.payload.get("ts") or 0)) < apart:
                 continue
             out.append(r)
-            if len(out) >= limit:
+            if limit is not None and len(out) >= limit:
                 break
         return out
 

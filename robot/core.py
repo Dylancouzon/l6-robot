@@ -141,21 +141,40 @@ class Robot:
         """
         now = now or time.time()
         tracks = self.detector.process(frame, now)
+        live = []
         for t in tracks:
-            if not t.due_for_query(now):
-                continue
-            t.vec = models.embed_crop(t.crop)
-            hit, score = self.memory.recognize(t.vec)
-            t.score = score
-            t.label = hit.payload["label"] if hit else None
-            t.note = hit.payload["transcript"] if hit else None
-            t.thumb = hit.payload.get("thumb") if hit else None
-            t.last_query = now
-            t.crop_q = 0.0  # collect a fresh best crop for the next query
+            if t.due_for_query(now):
+                t.vec = models.embed_crop(t.crop)
+                hit, score, guess = self.memory.recognize(t.vec)
+                t.score = score
+                t.label = hit.payload["label"] if hit else None
+                # a near-miss wears an orange "hat?" box instead of UNKNOWN —
+                # display only: a guessed track is still unlabeled, so it is
+                # still the teach target, writes no sighting, can't be
+                # forgotten, and is still checked against the ignore list
+                t.guess = guess
+                t.note = hit.payload["transcript"] if hit else None
+                t.thumb = hit.payload.get("thumb") if hit else None
+                t.last_query = now
+                t.crop_q = 0.0  # collect a fresh best crop for the next query
+                if hit is None:
+                    # An unknown that looks like something the operator
+                    # dismissed is dismissed again, silently — this is what
+                    # makes IGNORE survive a restart (and a REBOOT), since the
+                    # tid blocks in the detector die with the run. Checked
+                    # only when no taught view matched: a taught label always
+                    # beats an ignore, so a degenerate ignored crop can hide
+                    # unknown clutter at worst, never a taught object. Undo is
+                    # TRACK AGAIN in the memory tab, same as ever.
+                    ig = self.memory.match_ignored(t.vec)
+                    if ig is not None:
+                        self.detector.ignore(t.tid, pid=ig.id)
+                        continue  # not displayed, not teachable
+            live.append(t)
 
-        knowns = self._one_per_label([t for t in tracks if t.label])
+        knowns = self._one_per_label([t for t in live if t.label])
         primary = self.focused(
-            [t for t in tracks if not t.label and t.last_query], pool="unknown")
+            [t for t in live if not t.label and t.last_query], pool="unknown")
         display = knowns + ([primary] if primary else [])
         # Decided here, on the one thread that owns track state. The teach
         # target is the salient unknown, never a known — otherwise a
@@ -286,6 +305,38 @@ class Robot:
         self.log(f'taught "{label[:18]}" -> image + text')
         return {"id": pid, "label": label, "transcript": transcript}
 
+    def confirm(self, label, frame=None):
+        """One tap on the orange guess: teach the attending crop as that name.
+
+        The maybe band shows "dylan? 0.87" — everything a teach needs is
+        already on screen: the crop (the attending track's) and the name (the
+        guess). Confirming skips the voice round-trip and its 6 s of Whisper.
+        The transcript IS the label, which is the bare-noun teach recall's
+        text search already handles ("Hat." scored 0.725 against the question
+        that mattered).
+
+        `label` is what the page displayed at tap time, verified against the
+        live guess before acting — the FORGET lesson: focus moves under a
+        finger already on its way down, and a tap meant for "dylan?" must not
+        teach whatever the panel switched to. Returns the teach result, or
+        None if the guess moved on (honest refusal, nothing written).
+
+        The track is labeled in place — the point just written IS this crop,
+        so the match is certain — which turns the box teal on the tap and
+        makes a second tap a no-op instead of a duplicate view. requery_now
+        still runs so score and thumb refresh at the next pass.
+        """
+        t = self.attention
+        if (t is None or t.label or not t.guess or t.crop is None
+                or t.guess.lower() != label.lower()):
+            return None
+        res = self.teach(t.crop, t.guess, frame=frame, box=t.box)
+        t.label = res["label"]
+        t.note = res["transcript"]
+        t.guess = None
+        t.requery_now()
+        return res
+
     # -- forget / ignore -------------------------------------------------------
 
     def forget(self, label):
@@ -302,6 +353,12 @@ class Robot:
             # have a track wearing the other casing of the same label
             if t.label and t.label.lower() == label.lower():
                 t.label = t.note = t.thumb = None
+                t.requery_now()
+        for t in self.detector.tracks.values():
+            # a guess wearing the deleted name would outlive it for a requery
+            # beat otherwise — same reason the labels above are stripped
+            if t.guess and t.guess.lower() == label.lower():
+                t.guess = None
                 t.requery_now()
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')
         return n
@@ -349,37 +406,67 @@ class Robot:
         deleting it alone would leave the label's sightings behind in recall,
         describing an object the robot can no longer recognize.
 
-        The point must actually be one of this object's taught views, and that
-        is checked here rather than trusted: the id and the label arrive
-        together from a page that may have been looking at a stale list, and
-        two mistakes follow from believing it. A view already dropped from
-        another tab would count as "the last one" and forget the whole object
-        — sightings and all — on a press that asked to delete something that
-        was already gone. And a pid belonging to something else (a sighting,
-        another object's view) would be deleted while the log said otherwise.
+        Sightings are droppable through the same door now — the tab's cycle
+        shows them, and a bad auto-saved photo (a stale box, a hand over the
+        object) is as worth removing as a bad teach. A sighting drop deletes
+        the whole BURST the shown row stands for (forget_sighting_burst):
+        deleting only the shown point promotes a near-identical frame from
+        seconds earlier into the same slot, which reads as a delete that did
+        nothing — measured, not guessed. It never cascades to the object:
+        only the last *taught* view takes the object with it.
+
+        The point must actually belong to this object, and that is checked
+        here rather than trusted: the id and the label arrive together from a
+        page that may have been looking at a stale list, and two mistakes
+        follow from believing it. A view already dropped from another tab
+        would count as "the last one" and forget the whole object —
+        sightings and all — on a press that asked to delete something that
+        was already gone. And a pid belonging to something else (another
+        object's view, an ignore point) would be deleted while the log said
+        otherwise.
         """
         ids = self.memory.taught_ids(label)
-        if pid not in ids:
-            return 0, False
-        if len(ids) <= 1:
-            return self.forget(label), True
-        self.memory.forget_point(pid)
-        self.log(f'dropped one view of "{label[:18]}"')
-        return 1, False
+        if pid in ids:
+            if len(ids) <= 1:
+                return self.forget(label), True
+            self.memory.forget_point(pid)
+            self.log(f'dropped one view of "{label[:18]}"')
+            return 1, False
+        if pid in self.memory.seen_ids(label):
+            n = self.memory.forget_sighting_burst(pid)
+            self.log(f'dropped {n} sighting photo(s) of "{label[:18]}"')
+            return n, False
+        return 0, False
 
     def ignore(self, track, frame=None):
         """Dismiss an unknown so the robot stops offering it — clutter you
-        don't want to teach. Sticky per track, so it stays dismissed.
+        don't want to teach. Persistent now: the dismissal writes the crop's
+        vector to the shard (kind="ignored"), so the same-looking object is
+        re-suppressed after a restart, when track ids mean nothing. It used
+        to live only as a track id in the detector, and every power cut
+        brought all the clutter back — reported as "ignored items get
+        deleted each session".
 
         Takes the track rather than its id so a picture of what was dismissed
         can go with it: the memory tab lists these, and "IGNORED x3" with no
         pictures is not something an operator can undo with any confidence.
         """
-        self.detector.ignore(track.tid, thumb=self._scene(frame, track.box))
+        # The teach target has always been embedded (it is only offered after
+        # its first query), so this fallback embed never runs in practice —
+        # it is here so a caller with a never-queried track cannot write a
+        # vectorless point.
+        vec = track.vec if track.vec is not None else models.embed_crop(track.crop)
+        pid = self.memory.ignore(vec, thumb=self._scene(frame, track.box))
+        self.detector.ignore(track.tid, pid=pid)
+        self.log("ignored one unknown")
 
-    def unignore(self, tid):
-        """Take one object off the ignore list, from the memory tab."""
-        return self.detector.unignore(tid)
+    def unignore(self, pid):
+        """Take one dismissal back, from the memory tab: delete its point and
+        lift any live blocks that came from it."""
+        ok = self.memory.unignore(pid)
+        if ok:
+            self.detector.unblock(pid)
+        return ok
 
     # -- ask -------------------------------------------------------------------
 
