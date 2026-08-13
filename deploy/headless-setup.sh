@@ -54,7 +54,7 @@ sudo -u "$USER_NAME" -H env PATH="/home/$USER_NAME/.local/bin:$PATH" \
   sh -c "cd '$REPO' && uv run --no-sync python -c '
 from robot import models
 models.warm_up(lambda n: print(\"  cached\", n))
-models._text_model(); models._clip_text(); models._asr_model()
+models._text_model(); models._asr_model()
 print(\"  cached speech and text encoders\")'"
 
 say "service — start on boot, restart on failure, live whenever the box is on"

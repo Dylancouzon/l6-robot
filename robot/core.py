@@ -167,9 +167,13 @@ class Robot:
             # only recognized objects are logged: an unnamed thing has no label
             # or text to recall, so a sighting for it would just clutter recall
             if t.label and not t.sighted and t.vec is not None:
+                # the picture is the scene-style one (box + margin, unmasked),
+                # same as the memory tab's: recall shows these rows to a
+                # human, and the masked gray crop it used to store answers
+                # "where did I leave it" with a fragment on a gray void
                 self.memory.remember_sighting(
                     t.vec, t.label, ts=now,
-                    thumb=self._thumb(t.crop, t.tid),
+                    thumb=self._scene(frame, t.box),
                 )
                 t.sighted = True
                 self.log(f"seen: {t.label} ({t.score:.2f})")
@@ -323,6 +327,17 @@ class Robot:
         self.log(f'renamed "{label[:14]}" -> "{to[:14]}" ({n} point(s))')
         return n
 
+    def set_where(self, place):
+        """Move the robot: change the place stamped on memories from now on.
+
+        From the memory tab, so a relocated appliance doesn't need its
+        service file edited (--location was the only way to set this).
+        Old points keep their place — that is the feature, not a gap.
+        """
+        where = self.memory.set_where(place)
+        self.log(f'here: "{where}"' if where else "location cleared")
+        return where
+
     def forget_view(self, pid, label):
         """Delete ONE taught view — the cure for a single bad crop.
 
@@ -369,12 +384,38 @@ class Robot:
     # -- ask -------------------------------------------------------------------
 
     def ask(self, question, since_ts=None):
-        """Cross-modal, time-filtered recall — grouped seen vs heard."""
-        return self.memory.day_recall(
-            text_vec=models.embed_query(question),
-            clip_text_vec=models.embed_query_clip(question),
-            since_ts=day_start_ts() if since_ts is None else since_ts,
-        )
+        """Recall: pick the object by what was SAID about it, then answer
+        with where it was last seen.
+
+        Two steps on purpose. The question and the taught transcripts live
+        in the same text space, so Nomic picks the object reliably (0.725
+        vs 0.424 for the runner-up, on the live shard). The old single-step
+        version searched the image space with CLIP's text tower and the
+        whole question — which put every sighting of the day in one flat
+        0.246-0.262 band, so the spoken answer was noise wearing whatever
+        label had the most sightings. And once the object is chosen, WHERE
+        it was is a question about time, not similarity: the newest
+        sightings, not the nearest vectors.
+
+        "What did you see today?" is an inventory, not a search: the
+        distinct objects sighted since morning, no vectors involved.
+        ponytail: one phrase check, not intent parsing — the demo script
+        asks this exact question. `since_ts` only scopes the inventory;
+        "where did I leave it" deliberately looks back past midnight.
+        """
+        if "what did you see" in question.lower():
+            since = day_start_ts() if since_ts is None else since_ts
+            return {"inventory": True, "label": None, "note": None,
+                    "score": 0.0, "sightings": self.memory.seen_since(since)}
+        hit = self.memory.best_taught(models.embed_query(question))
+        if hit is None:
+            return {"inventory": False, "label": None, "note": None,
+                    "score": 0.0, "sightings": []}
+        label = hit.payload.get("label")
+        return {"inventory": False, "label": label,
+                "note": hit.payload.get("transcript"),
+                "score": hit.score,
+                "sightings": self.memory.last_sightings(label)}
 
     # -- the reboot beat ---------------------------------------------------------
 

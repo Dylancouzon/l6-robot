@@ -17,9 +17,13 @@ from pathlib import Path
 NOMIC_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 NOMIC_DIM = 768
 CLIP_VISION_MODEL = "Qdrant/clip-ViT-B-32-vision"
-CLIP_TEXT_MODEL = "Qdrant/clip-ViT-B-32-text"
 CLIP_DIM = 512
 WHISPER_MODEL = "whisper-base"
+# CLIP's TEXT tower is gone from this stack. It existed to search the image
+# space with the words of a question, and that search was measured useless on
+# the live shard (every sighting in one flat 0.25 band — see "Recall answered
+# from the wrong space" in CLAUDE.md); recall now picks the object in Nomic's
+# text space instead. Dropping it also drops ~2.5 s of first-ask load.
 
 # ONNX Runtime gives every session one thread per core and lets idle threads
 # spin. Four encoders next to the detector would then oversubscribe a Jetson's
@@ -63,13 +67,6 @@ def _clip_vision():
 
 
 @lru_cache(maxsize=1)
-def _clip_text():
-    from fastembed import TextEmbedding
-    return TextEmbedding(CLIP_TEXT_MODEL, threads=ENCODER_THREADS,
-                         cache_dir=CACHE_DIR)
-
-
-@lru_cache(maxsize=1)
 def _asr_model():
     import onnx_asr
     return onnx_asr.load_model(WHISPER_MODEL, sess_options=_sess_options(),
@@ -93,11 +90,6 @@ def embed_crop(bgr):
     return next(_clip_vision().embed([img])).tolist()
 
 
-def embed_query_clip(text):
-    """Embed a question into CLIP's space, to search the image vector."""
-    return next(_clip_text().query_embed([text])).tolist()
-
-
 def transcribe(wav_path):
     """Local Whisper speech-to-text on one WAV file."""
     return _asr_model().recognize(wav_path).strip()
@@ -110,15 +102,15 @@ def transcribe(wav_path):
 # double the load time, and a transient extra model's worth of memory on a
 # board that has none to spare. embed_crop never contends: _clip_vision is
 # built by warm_up() at startup and no path builds it here. The OTHER embed
-# helpers (embed_text, embed_query, embed_query_clip) skip this lock and are
-# safe only by call ordering — every caller runs warm_encoders(kind) first on
-# its own thread, so their models are always cached by the time they run. Embed
-# text from any new thread without that warm call and the double build is back.
+# helpers (embed_text, embed_query) skip this lock and are safe only by call
+# ordering — every caller runs warm_encoders() first on its own thread, so
+# their models are always cached by the time they run. Embed text from any new
+# thread without that warm call and the double build is back.
 _warm_lock = threading.Lock()
 
 
-def warm_encoders(kind):
-    """Build the models one voice action needs, BEFORE the caller takes a lock.
+def warm_encoders():
+    """Build the models a voice action needs, BEFORE the caller takes a lock.
 
     All loaders are lru_cached, so this is exactly the work the action would do
     anyway — just earlier. NOT free, only better-placed: a cold load holds the
@@ -137,15 +129,13 @@ def warm_encoders(kind):
       DEAD_SECONDS to delete live tracks — the one way the app itself can
       cause the flicker it is trying not to have.
 
-    `kind` is the same "t"/"a" that already flows through the live app. Teach
-    never searches CLIP's text space, and this board budgets memory tightly
-    enough that loading an encoder it will not use is worth avoiding.
+    Teach and ask now need the same two models (Whisper, Nomic): the
+    "t"/"a" split this used to take chose whether to also load CLIP's text
+    tower, which is gone — see the note by the model names above.
     """
     with _warm_lock:
         _asr_model()         # every voice action transcribes first
         _text_model()        # teach stores a text vector; ask queries one
-        if kind == "a":
-            _clip_text()     # ask also searches the image space with CLIP text
 
 
 def warm_up(progress=lambda name: None):
