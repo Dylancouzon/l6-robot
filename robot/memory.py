@@ -105,12 +105,21 @@ class Memory:
         self.shard.flush()
         return pid
 
-    def teach(self, image_vec, text_vec, label, transcript, ts=None, thumb=None):
+    def teach(self, image_vec, text_vec, label, transcript, ts=None, thumb=None,
+              scene=None):
         """One point, BOTH named vectors — searchable by sight and by words.
 
         ponytail: re-teaching the same object adds a second point; recognition
         returns whichever view is nearest, so the newer note isn't guaranteed
         to win. Fold-by-label (as in memory-fleet) if that ever matters.
+
+        `scene` is the object as the camera saw it — the detector's box plus
+        a margin, unmasked — and is shown instead of the crop in the memory
+        tab, because a masked gray-filled crop is what CLIP compares, not what
+        a human recognizes. Points written before it existed simply have no
+        scene, and the tab falls back to the crop. (Points written during one
+        brief window hold a whole frame instead; same fallback, nothing to
+        migrate.)
         """
         return self._upsert(
             {"image": image_vec, "text": text_vec},
@@ -120,6 +129,7 @@ class Memory:
                 "transcript": transcript,
                 "ts": ts or time.time(),
                 "thumb": thumb,
+                "scene": scene,
                 "where": self.where,
             },
         )
@@ -146,6 +156,47 @@ class Memory:
             self.shard.flush()
         return len(ids)
 
+    def rename(self, label, new_label):
+        """Give every point wearing one label a different one.
+
+        Whisper mishears a bare noun ("laptop" comes back as "La-caw"), and
+        until this existed the only cure was to forget the object and teach it
+        again — throwing away vectors that were perfectly good, because the
+        *word* was wrong. Nothing here touches a vector.
+
+        `set_payload`, not a re-upsert: `UpdateOperation.upsert_points` with an
+        existing id does NOT rewrite the point in this qdrant_edge build — it
+        reports nothing and changes nothing. Other payload keys survive.
+        """
+        from qdrant_edge import ScrollRequest
+        records, _ = self.shard.scroll(
+            ScrollRequest(limit=10000, with_payload=True))
+        # case-folded, like forget: a pre-lowercase shard can hold both
+        # spellings of one object and a rename must move all of it
+        ids = [p.id for p in records
+               if (p.payload.get("label") or "").lower() == label.lower()]
+        if ids:
+            self.shard.update(
+                UpdateOperation.set_payload(ids, {"label": new_label}))
+            self.shard.flush()
+        return len(ids)
+
+    def taught_ids(self, label):
+        """Point ids of every taught view wearing this label, case-folded."""
+        from qdrant_edge import ScrollRequest
+        records, _ = self.shard.scroll(ScrollRequest(
+            limit=10000, with_payload=True,
+            filter=Filter(must=[
+                FieldCondition(key="kind", match=MatchValue(value="taught")),
+            ])))
+        return [p.id for p in records
+                if (p.payload.get("label") or "").lower() == label.lower()]
+
+    def forget_point(self, pid):
+        """Delete exactly one point — one taught view, not the whole object."""
+        self.shard.update(UpdateOperation.delete_points([pid]))
+        self.shard.flush()
+
     def remember_sighting(self, image_vec, label, ts=None, thumb=None):
         """A cadence write: something stable in view, image vector only."""
         return self._upsert(
@@ -160,6 +211,54 @@ class Memory:
         )
 
     # -- reads ----------------------------------------------------------------
+
+    def count_label(self, label, kind="seen"):
+        """How many points of one kind wear this label — the tab's sighting
+        count. Exact-case: labels are lowercased at parse time (see
+        audio.parse_label), so only a shard written before that change can
+        undercount, and only in a number shown for interest."""
+        from qdrant_edge import CountRequest
+        return self.shard.count(CountRequest(exact=True, filter=Filter(must=[
+            FieldCondition(key="kind", match=MatchValue(value=kind)),
+            FieldCondition(key="label", match=MatchValue(value=label)),
+        ])))
+
+    def objects(self):
+        """Every taught object, newest first: one entry per label, all its views.
+
+        This is what the memory tab lists — the answer to "what do you know?",
+        which used to be answerable only by pointing the camera at things one
+        at a time and reading the box.
+
+        Grouped in Python rather than by a facet query, and case-folded the
+        same way `forget` and `_dedupe_by_label` are, so the tab's idea of one
+        object is exactly the tab's delete button's idea of one object. A full
+        scan of the taught points: there are single digits of them at demo
+        scale, and the label is not indexed.
+        """
+        from qdrant_edge import ScrollRequest
+        records, _ = self.shard.scroll(ScrollRequest(
+            limit=10000, with_payload=True,
+            filter=Filter(must=[
+                FieldCondition(key="kind", match=MatchValue(value="taught")),
+            ])))
+        groups = {}
+        for r in records:
+            label = r.payload.get("label") or ""
+            g = groups.setdefault(label.lower(), {"label": label, "views": []})
+            # the id rides along so the tab can drop one bad view without
+            # taking the object's good ones with it
+            g["views"].append(dict(r.payload, id=r.id))
+        out = []
+        for g in groups.values():
+            g["views"].sort(key=lambda p: p.get("ts") or 0, reverse=True)
+            # display the newest view's spelling, since that is the one a
+            # re-teach just wrote
+            g["label"] = g["views"][0].get("label") or g["label"]
+            g["seen"] = self.count_label(g["label"])
+            out.append(g)
+        out.sort(key=lambda g: g["views"][0].get("ts") or 0, reverse=True)
+        return out
 
     def recognize(self, image_vec):
         """Nearest taught view vs the threshold. Returns (hit|None, score)."""

@@ -85,14 +85,33 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
 |---|---|
 | `T` / hold **TEACH** | Teach the focused unknown object by voice |
 | `A` / hold **ASK** | Ask a voice question, such as "what did you see today?" |
-| `F` / **FORGET** | Delete what it knows about the focused recognized object |
+| `M` / **MEMORY** | Everything it knows, with pictures — and where you delete things |
 | `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
+| `F` | Delete what it knows about the focused recognized object — keyboard only |
 | `R` | Close the shard, reload from disk, then re-ask — keyboard only |
 | Ctrl-C | Quit (no on-screen quit, so a stray tap won't end the demo) |
 
-Every recognized object is drawn on screen. Only the most prominent unknown object is teachable.
+Every recognized object is drawn on screen, but **only one box per remembered object**. Teaching something two or three times is the recommended habit, and each taught view is a memory the detector's other boxes can match too — teach yourself twice and the person box, the face box and the torso box all come back with your name, so one memory is drawn three times over one person. The best match wins the box; the others keep tracking silently. The cost, accepted: two identical objects in frame — two of the same mug — show one box between them, because the robot has nothing to tell them apart with.
 
-`R` has no button. It is a presenter's beat rather than a control — and a robot serving its own Wi-Fi with the internet unplugged already makes the point that the memories are local. Wiping them is `--reset`, which is deliberately off the UI so a stray tap cannot erase a demo.
+Only the most prominent unknown object is teachable.
+
+Two controls have no button. `R` is a presenter's beat rather than a control — and a robot serving its own Wi-Fi with the internet unplugged already makes the point that the memories are local. Wiping everything is `--reset`, deliberately off the UI so a stray tap cannot erase a demo.
+
+`F` lost its button because **aiming a delete with the camera does not work**. It acts on whatever holds the box at the instant of the press, and focus can move between deciding to press and pressing — so the object that gets deleted is not always the one you were looking at. Deleting now lives in the **MEMORY** tab, where you pick the object out of a list and see its picture first. The key stays for filming: it is still the fastest way to show a delete, and a key is not something a thumb lands on by accident.
+
+### The Memory Tab
+
+**MEMORY** (or `M`) opens a full-screen list of every object the robot has been taught, newest first, with the number of times it has since been sighted. It answers "what do you actually know?" without pointing the camera at things one at a time.
+
+- **The picture is the object with a little room around it** — the detector's box plus a margin — not the crop and not the whole frame. What recognition compares is a masked, gray-filled cut-out that is hard for a human to identify; a whole frame is worse, because the object is a detail somewhere in a room. The margin is there so you can see where it was.
+- **Tap a picture to walk that object's taught views.** Teaching the same object again adds a view rather than replacing one — that is what makes recognition work from more than one angle (see [What to teach](#what-to-teach)) — and this is the only way to see whether the second one was any good.
+- **RENAME fixes the name without touching the vectors.** Whisper mishears a bare noun — a real capture of "laptop" came back as `La-caw` — and until this existed the only cure was to forget the object and teach it again, throwing away good views because the *word* was wrong. Tap RENAME, type, press Enter. Renaming onto a name that already exists merges the two objects, which is how you fix `Laptop` and `laptop` having become separate things.
+- **FORGET on a card takes two taps.** The first arms it, the second deletes. It removes every point for that object, taught views and sightings alike, and it cannot be undone.
+- **DROP THIS VIEW deletes just the view you are looking at**, and appears only on objects that have more than one. This is the cure for a single bad teach — a blurred crop, or one that caught the desk instead of the mug — which otherwise sits in memory forever matching things it shouldn't. Tap the picture until the bad one is showing, then drop it. Dropping the last remaining view forgets the whole object instead, so its sightings don't outlive it in recall.
+- **Ignored objects are listed at the bottom**, with a picture each and a **TRACK AGAIN** button. `Q` / **IGNORE** used to be a one-way door for the rest of the session, with nothing on screen to say what had been dismissed. Nothing was ever stored for these, so un-ignoring simply lets the object be proposed again.
+- The list pages in as you scroll, and the video feed is dropped while the tab is open — on the appliance's own Wi-Fi the feed is most of the radio, and none of it is visible behind the tab.
+
+Objects taught before this existed have no picture of their own and fall back to showing their recognition crop, which is why an old memory looks gray and masked beside a new one. Nothing needs deleting; teach it again and the newer view carries a proper picture. (Memories taught during one brief window show the whole frame instead of the object — same story, same fix.)
 
 ### The Page
 
@@ -102,7 +121,7 @@ The panel shows what the robot is attending to: the label or `UNKNOWN`, the live
 
 ### Aiming It
 
-`TEACH` acts on the most prominent **unknown** object; `FORGET` acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame.
+`TEACH` acts on the most prominent **unknown** object; the `F` key acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame. Aiming only has to be good enough for teaching now — deleting is done from the [memory tab](#the-memory-tab), by picking the object off a list.
 
 Focus is deliberately **sticky**: once an object holds the thick box, it keeps it until something is clearly more prominent — roughly 60% more — or until it leaves the frame. Without that, two objects of similar size and position trade the box several times a second, and you end up teaching whichever one happened to win on the frame you pressed. If focus won't leave an object, move the one you want closer or more central, or press `Q` / **IGNORE** to dismiss the current unknown outright.
 
@@ -161,7 +180,9 @@ Teach objects, not surfaces. A crop with little information in it — a blank pa
 
 **Teach each object two or three times, turning it between teaches.** One taught view is one point in CLIP's space, and the same object seen from another angle can land far from it — under the recognition bar, so the robot treats an object it knows as a stranger. Re-teaching adds views, and recognition matches against the nearest one; this is the same idea as adding documents to a search index, and it is the single biggest recognition improvement available. Measured on a live shard: a laptop's best single view covered 103 of its 173 later sightings, the union of its six views covered all 173.
 
-Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, `F` / **FORGET** it and teach again.
+**People are objects too.** Nothing filters them out any more: point the camera at someone, hold TEACH and say "this is Dylan", and they are recognized like anything else. Two things to know. A seated person at desk distance is about 7% of the frame, comfortably inside the `--max-area` cap, but a face filling the view is not — stand back rather than leaning in. And CLIP is not a face recognizer: at 512 dimensions from a 224 px crop it keys on the whole silhouette, clothing very much included, so expect it to need a re-teach when someone changes their jacket, and expect two people dressed alike to be harder to separate than two different objects. Teach each person two or three times, as you would anything else.
+
+Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, forget it in the [memory tab](#the-memory-tab) and teach again.
 
 ### What to say
 

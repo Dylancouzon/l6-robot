@@ -6,14 +6,14 @@ conclusion or a milestone completes.
 **Status at 2026-08-12: solved, shipped, and operator-confirmed.** The robot
 runs on the Jetson from a plain `uv` install — no container, no reflash, no
 source-built PyTorch — as a headless appliance on its own 5 GHz hotspot,
-driven from a phone. Nine rounds of work landed the same day; each has a
+driven from a phone. Eleven rounds of work landed the same day; each has a
 section below with the measurements. The cold boot the earlier rounds flagged
 as unproven has since happened: the box booted at 13:13 into
 `multi-user.target` and the service was serving 14 seconds later. The operator
 teaches by phone, so the HTML panel and the voice path are confirmed in daily
 use.
 
-The nine rounds, newest last — each heading below carries the full story:
+The eleven rounds, newest last — each heading below carries the full story:
 
 1. **Startup memory** (not CUDA) made the view update every 15 s — lazy
    encoder loading fixed it. See "The problem and the fix".
@@ -40,6 +40,13 @@ The nine rounds, newest last — each heading below carries the full story:
    model loads hidden under the button hold, multi-view teaching measured as
    the big recognition win, swap re-enabled, live shard cleaned. See
    "Recognition quality review" below.
+10. **FORGET deleted the wrong object** — it was aimed by focus, which moves
+    under a finger already on its way down. There is a MEMORY tab now: every
+    taught object with a picture, its taught views, and the delete. See "The
+    memory tab" below.
+11. **People stopped being filtered out** — the person blacklist is deleted, so
+    "this is Dylan" works like any other teach; the tab also gained RENAME and
+    DROP THIS VIEW. See "People are objects now".
 
 ## Goal and constraints
 
@@ -60,13 +67,15 @@ The nine rounds, newest last — each heading below carries the full story:
 ## Repository state
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
-- PRs #1–#7 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
-  headless appliance, streaming + voice, HTML panel) are all **merged** into
-  `main` as of 2026-08-12. Their rationale lives in the sections below.
-- Branch: `codex/track-lifetime-and-focus` (PR #8, open): the work under
-  "Objects came and went on a static scene" and "Recognition quality review".
-  No new dependencies. It also **refuses** a threshold move to 0.88 on
-  measurement, which is the part to read before anyone tries it again.
+- PRs #1–#8 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
+  headless appliance, streaming + voice, HTML panel, track lifetime + focus)
+  are all **merged** into `main` as of 2026-08-12. Their rationale lives in
+  the sections below — including #8's **refusal** of a threshold move to 0.88
+  on measurement, which is the part to read before anyone tries it again.
+- Branch: `codex/memory-tab` (PR #9), off `main`: the work under "The memory
+  tab", "People are objects now" and the two rounds of review fixes below. No
+  new dependencies, and additive to the payload — a shard written before it
+  still opens and still lists, showing crops where it has no scene.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -249,7 +258,8 @@ the JPEG the browser is streaming.
    detect pass fired a CLIP embed (~0.16 s) for each of N tracks in a single
    locked burst. Now each path requeries only what it must: teach stamps the one
    track it taught (stashed as `pending_track` when the crop is grabbed, beside
-   the existing `pending_crop`), and forget stamps only the tracks wearing the
+   `pending_teach`, which was `pending_crop` until the memory tab gave a teach a
+   frame and a box to stash too), and forget stamps only the tracks wearing the
    deleted label. One embed instead of N.
 3. **The panel re-read thumbnails off disk every rendered frame** — up to three
    `cv2.imread` calls at 10 fps. Now `_thumb_img`, an `lru_cache(32)`. Thumbs
@@ -754,7 +764,8 @@ expensive part. RSS/threads unmoved at 2.47 GB / 19 under sustained polling.
   named after its mechanism taught nobody that, and a robot on its own Wi-Fi
   with no internet already makes the point. The wipe is `--reset`, still
   CLI-only. Four buttons fit a phone; five did not, so this also removed the
-  need for an overflow tray.
+  need for an overflow tray. **Still four**: the memory tab did not add a fifth,
+  it took FORGET's slot — see "The memory tab".
 - **No device split.** "Desktop only" was rejected for REBOOT: the appliance is
   headless, so the phone is the only UI it has.
 - **Polling, not SSE.** `protocol_version` stays HTTP/1.0, so each poll is its
@@ -936,17 +947,20 @@ review"), and the steady 6 s is transcription's floor on this CPU.
 
 ### Two hazards found and deliberately left alone
 
-Both are real, both were reported to the operator, and neither is fixed:
+Both were real and both were reported to the operator. **The first is now
+gone** — not fixed, deleted, see "People are objects now" below:
 
-- **`is_person_like` blacklists a track id permanently.** `_person_tids` is
-  never cleared for the session, and `PERSON_WORDS` matches by word, so one
-  frame classified person-ish removes an object for the whole demo. Confirmed
-  live: a `person` box sits over the microphone at **0.77–0.91 conf on nearly
-  every frame** while the mic's own proposal flickers near the floor, and one
-  proposal in the scene comes back as `'baby bottle'` — `baby` is in the list,
-  so that object is permanently un-teachable. `hair dryer`, `head phones`,
-  `arm chair`, `eye glasses` go the same way. Needs a design decision (decay the
-  flag? require two consecutive hits?), not a one-liner.
+- ~~**`is_person_like` blacklists a track id permanently.**~~ `_person_tids` was
+  never cleared for the session, and `PERSON_WORDS` matched by word, so one
+  frame classified person-ish removed an object for the whole demo. Confirmed
+  live at the time: a `person` box sat over the microphone at **0.77–0.91 conf
+  on nearly every frame** while the mic's own proposal flickered near the floor,
+  and one proposal in the scene came back as `'baby bottle'` — `baby` was in the
+  list, so that object was permanently un-teachable. `hair dryer`,
+  `head phones`, `arm chair`, `eye glasses` went the same way. The whole
+  mechanism was removed when people became teachable, which takes the hazard
+  with it. Kept here because it explains anything odd in a shard taught before
+  that.
 - **The lens has visible barrel distortion.** A crop's geometry therefore
   depends on where in frame it sits, so an object taught near the centre and
   seen near the edge is a different shape to CLIP — part of the score spread
@@ -1061,11 +1075,361 @@ demo.
 
 ### Open options, offered and deliberately not taken this round
 
-- **Person-blacklist decay** (`_person_tids` is forever; one person-ish frame
-  makes an object permanently unteachable — see "Two hazards" above).
-  Smallest sane fix: require two consecutive person-ish hits.
+- ~~**Person-blacklist decay**~~ — overtaken: the blacklist is gone entirely,
+  see "People are objects now".
 - **`DETECT_CONF` 0.30 → 0.25** in `.env` against the visible blink — zero
   code, revert if clutter grows.
+
+## The memory tab — deleting stopped being something you aim
+
+Reported as "the forget button doesn't work well: sometimes we click as the
+focus goes on something else". That is not a bug to fix in FORGET; it is
+FORGET's design. It acted on `Robot.attention` at the instant of the press,
+and attention moves — a press is a decision plus a hand travelling, and the
+box can change owner in between. `FOCUS_MARGIN` already went 1.25 → 1.6 to
+slow that down (see "Objects came and went") and it cannot fix this: any
+stickiness that made deletes safe would make teaching impossible to aim.
+
+So deleting moved off the live view entirely. **`M` / MEMORY opens a
+full-screen list of everything taught, and you delete the card you are
+looking at.** No new dependencies, and no migration: this is additive to the
+payload.
+
+### What it is
+
+- `Memory.objects()` — taught points, grouped by label, case-folded exactly as
+  `forget` and `_dedupe_by_label` are, so the tab's idea of one object is the
+  delete button's idea of one object. Newest first, with `count_label` giving
+  the sighting count per label (5 labels = 6 ms, measured).
+- Four endpoints: `GET /memories?offset&limit`, `GET /ignored`,
+  `POST /forget?label=`, `POST /unignore?tid=`. (Six now — `POST /rename` and
+  `POST /forget_view` arrived in the next round, below.) The two mutations run
+  synchronously in the HTTP handler under `self.lock` — an HTTP handler thread
+  is already off the frame pump, which was the whole reason for the key
+  thread, so routing them through the key queue would have bought nothing and
+  cost the tab an honest answer to redraw from.
+- **A "scene" picture per taught view**: the whole frame, boxed and shrunk to
+  640 px at JPEG quality 80 (43 KB, against 89 KB at cv2's default 95).
+  **Superseded the same evening** — it is a crop of the object plus a margin
+  now, see "Two follow-ups" below; the sizing note stands, the framing does
+  not. The
+  crop is what CLIP compares and it is a poor thing to identify an object by —
+  masked, gray-filled, often a fragment. Payload key `scene`; points written
+  before it exist simply fall back to the crop, which is why an old memory
+  looks gray beside a new one and why **nothing had to be deleted**, despite
+  the operator offering.
+- `Detector._ignored` went from a set of tids to `tid -> {tid, thumb, ts}`,
+  so the tab can list what IGNORE dismissed and undo it. Nothing is stored for
+  an ignored object, so un-ignoring is just removing the block.
+- `Robot.ignore` now takes the **track and frame** rather than a tid, for the
+  same reason: "IGNORED x3" with no pictures is not something anyone can undo
+  with confidence.
+
+### Decisions
+
+- **MEMORY took FORGET's button; it is not a fifth.** Four still fit a phone.
+  The `F` key stays — it is the fastest delete to film, and a key is not
+  something a thumb lands on by accident.
+- **A full-screen sheet, not a third column.** A phone has no width to spare,
+  and browsing memory is something you stop to do, not something to watch
+  beside the feed. It also drops the video (`img.removeAttribute('src')`,
+  with `paused` guarding the reconnect handler) — on the hotspot the feed is
+  most of the radio and none of it is visible behind the sheet.
+- **Two-tap delete, armed then filled.** A list you scroll with a thumb is a
+  list you tap by accident, and this delete is unrecoverable. No `confirm()`:
+  it blocks the page and reads as a browser artifact on a phone.
+- **`repeat(auto-fill, minmax(170px, 1fr))`, no breakpoint.** One full-width
+  card per row put 2.4 objects on a phone screen, which is not a list you can
+  scan; two columns puts 4.5 and still shows the picture at 173x97.
+- ~~**Delete by object, not by view.**~~ **Overturned in the very next round,
+  on the operator's request** — DROP THIS VIEW exists, see "People are objects
+  now". The argument here was that teaching again is the fix for a bad view;
+  it is not, because teaching again *adds* a view and leaves the bad one in
+  memory matching things it shouldn't. Kept as written because it is a fair
+  record of how thin the reasoning was: "a second delete path is machinery"
+  was a guess about cost, and the cost turned out to be about fifteen lines.
+- **Grouping scans every taught point per page request.** Eight points on the
+  live shard. If a shard ever holds hundreds of objects, page the scroll
+  itself rather than slicing the grouped list.
+
+### Verified live, on this box
+
+Service stopped, the app run against a **copy** of the live shard (the rule
+under "Operational notes"), and driven over HTTP:
+
+- A real teach through the phone path — `GET /listen?k=t` then
+  `POST /audio?k=t` with a WAV — writes both pictures: `..._taught.jpg`
+  (crop) and `..._scene.jpg` (640x360, 47 KB, teal box on the object).
+  Whisper, the embeds and the shard write are untouched by any of this.
+- `/memories` pages without repeats or gaps; `/forget?label=water%20bottle`
+  returns the count, strips the label off the live track (panel score dropped
+  to 0.753, label null) and the object leaves the list; `/ignored` shows the
+  scene of what `Q` dismissed and `/unignore` returns it.
+- The page itself was driven in headless Firefox, not just eyeballed: paging
+  fires on scroll and stops when exhausted, tapping a picture walks
+  `view 1 of 2` → `2 of 2` → back with a different `src` each time, and one
+  tap of FORGET only arms it (4 objects still present; the armed text was
+  `TAP AGAIN` at the time and is `SURE?` since the buttons had to share a row)
+  and
+  disarms itself after 4 s. Harness: `shot_proxy.py` in the session
+  scratchpad — it serves the real `PAGE` with the tab opened and a probe
+  appended, and proxies everything else to the app. Throwaway, not in the repo.
+- Service restarted on the real shard afterwards: page 200 over
+  `https://10.42.0.1:8765`, five objects listed with their sighting counts.
+
+### Worth knowing
+
+- **A Q press writes a thumbnail nothing will ever reference again.**
+  `Detector._ignored` is session-only, so after a restart the scene JPEG
+  written for each ignored object is an orphan in `edge-data/thumbs`. Left
+  alone: it matches the existing policy that forgetting deletes points and not
+  files, and it is 5–15 KB per press on an NVMe. Noted so nobody re-discovers
+  it as a leak.
+- **The scene picture contains whatever was in frame, including people.** And
+  since the round below, a person can be the *subject* rather than the
+  background. Every scene captured during this work has the operator in
+  it. That is fine for a desk demo and worth a thought before a shard travels.
+- **No automated test covers any of this**, in keeping with the rest of the
+  repo: the headless replay path never renders a page. The probe above is the
+  only thing that has exercised the client, and it ran once.
+
+## People are objects now, and the tab can edit as well as delete
+
+Same day, on the operator's request: *"remove the human block — I actually
+want this project to recognize different people"*, plus the two follow-ups
+offered at the end of the memory-tab round (rename, drop one view). All three
+landed together.
+
+### The person filter is gone, not softened
+
+`PERSON_WORDS`, `is_person_like` and `_person_tids` are deleted, along with the
+`>4096` pruning that kept the blacklist bounded. `self.names` went with them,
+and so did the `cls` column in the detect loop's `zip`: **nothing in the app
+reads a detector class name any more.** That is worth noticing — the repo's
+whole claim is "detection finds a thing, memory decides which thing", and the
+one place that quietly consulted the detector's vocabulary was this filter.
+
+Measured before touching it, on the live camera at `DETECT_CONF = 0.30`, so
+the decision was not guessed:
+
+| proposal | conf | area | band | salience |
+|---|---|---|---|---|
+| person (also read as `sculptor`) | 0.92–0.94 | **0.072–0.078** | KEPT | 0.19–0.20 |
+| door | 0.71–0.75 | 0.089 | KEPT | 0.28 |
+| typewriter / office desk / shelve (phantoms) | 0.32–0.59 | 0.21–0.36 | DROPPED | — |
+
+So a seated person at desk distance sits **comfortably inside the 0.20 area
+cap** and needs no calibration change — which was the open question, since the
+cap exists to drop torso-sized boxes. A face filling the frame does exceed it;
+back off or raise `DETECT_MAX_AREA`. The `.env` defaults are untouched.
+
+What it costs, honestly:
+
+- **A person often will not hold focus.** Confirmed live: with the operator
+  standing in frame, the salient unknown was the *door* (0.28 against 0.20).
+  Only one unknown is displayed and teachable, so teaching a person is the
+  same aiming problem as any object — come closer, be central. Nothing here
+  needs fixing; it is the documented behaviour of `salience`.
+- **CLIP is not a face recognizer.** 512 dimensions from a 224 px crop keys on
+  the whole silhouette, clothing included. Two people dressed alike are a
+  harder separation than two objects, and a jacket change probably needs a
+  re-teach. **Untested — one person was available.** If someone reports people
+  being confused for each other, that is the thing to measure first, and
+  multi-view teaching is the first answer, not the threshold.
+- Hands and faces are now teachable clutter in principle. Not observed in the
+  measured frames (the person box covered the operator), so treat it as
+  unmeasured rather than absent. IGNORE dismisses them, and the memory tab can
+  now undo that.
+
+The privacy line is worth stating once, since this is teaching material: the
+robot stores a vector and a photograph of whoever is taught, in a shard that
+travels to demos. Teaching a person is a thing done with them, in front of
+them, by saying their name out loud.
+
+### Rename, and dropping one view
+
+Both live on the object's card in the memory tab.
+
+- **`Memory.rename`** rewrites the label on every point wearing it —
+  `set_payload`, never a re-upsert (an existing id does NOT rewrite the point
+  in this build; that trap is already recorded above). `Robot.rename`
+  lowercases and collapses whitespace exactly as `parse_label` does, so a
+  typed name and a spoken one normalize to the same key, and it updates live
+  tracks **in place** rather than requerying: the vectors did not move, so the
+  box just starts saying the new name. Verified live — 91 points renamed, and
+  the box read `dylan couzon` at 0.973 with no re-embed. Renaming onto an
+  existing label MERGES the two objects, which is deliberate: it is the cure
+  for `Laptop` and `laptop` having been separate things.
+- **`Robot.forget_view`** deletes one taught point. If it is the object's last
+  taught view it forgets the whole object instead — otherwise the label's
+  sightings outlive it and recall describes an object the robot can no longer
+  recognize. The button only appears when there are 2+ views, so a single-view
+  card offers FORGET and nothing more confusing.
+
+### Two bugs the browser probe caught, both invisible to the server tests
+
+Neither would have been found by curling the endpoints, and both are the kind
+that ship:
+
+- **Grid rows were being squeezed, so every card had its buttons clipped off
+  with nothing to scroll to.** `#memlist` has a definite height (`flex:1` in a
+  column), and with `auto` rows the browser fits the rows INTO that height:
+  measured `rows=132px ...` against a 266 px card, `scrollHeight` equal to
+  `clientHeight`. `align-content:start` does **not** prevent it — there is no
+  free space to distribute, the space is negative. `grid-auto-rows:max-content`
+  is the fix (132 → 284 px, scrollHeight 782 → 1346). It had looked fine at
+  four objects purely because the row height the browser picked happened to
+  exceed the content, which is why the earlier round's screenshots passed.
+- **Point ids do not survive JSON in a browser.** They come from
+  `itertools.count(time.time_ns())`, so ~1.8e18, well past JavaScript's 2^53
+  safe integer — the page rounded the id, asked to delete one that does not
+  exist, and the view **quietly survived its own deletion**. The server-side
+  test passed because Python parsed the same JSON exactly. `_view_json` now
+  emits the id as a **string**; the server parses it back. Anything else this
+  page ever sends an id for needs the same treatment.
+
+Two smaller ones from the same session: `.del` and `.drop` lost to
+`.obj button` on specificity (0,1,0 against 0,1,1), so FORGET rendered violet
+and DROP never got its own row — every modifier in that block now repeats the
+`.obj button` prefix. And `/forget_view` must be routed **before** `/forget`,
+because `startswith` matches both.
+
+### Verified
+
+Endpoints against a copy of the live shard: rename normalizes
+`"  My Magic Mouse  "` to `my magic mouse` across 212 points, keeps every
+transcript and thumb, and the sighting count follows the label; renaming onto
+an existing name merges 2 views + 1 into 3; dropping one view takes 2 to 1 and
+one point, leaving sightings alone; dropping a last view removes the object and
+its 85 sightings and says so. Five malformed requests all 400.
+
+In the page itself (headless Firefox, real `PAGE`): DROP arms on the first tap
+and drops on the second (`view 1 of 2 · 18:28` → `view 1 of 1 · 18:27`),
+single-view cards show only RENAME and FORGET, the rename field appears
+pre-filled and focused, Enter commits and Escape cancels.
+
+Replay over `testdata/` prints the same verdicts, and `verify_scores.py` is
+byte-identical to the documented baseline — same-object min 0.887 / med 0.920,
+different med 0.472 / max 0.611, margin +0.275. Service restarted on the real
+shard: 2.48 GB / 19 threads.
+
+### Two follow-ups from watching the operator use it
+
+Both reported the same evening, after he taught himself twice:
+
+- **The tab's picture is now the object, not the room.** `_scene` stored the
+  whole frame with a box drawn on it, which at 173 px on a phone card makes
+  the object a detail you squint at. It now crops to the detector's box plus
+  `SCENE_PAD = 0.3` of margin — wider than the recognition crop's `PAD = 0.12`,
+  which is tuned for what CLIP should see, where this is tuned for what a
+  person needs at thumbnail size and a little real background helps. No box is
+  drawn any more: the picture *is* the box. Unmasked, unlike the embedded
+  crop, because here the background is the point. 480 px longest side, and the
+  files got smaller with it — 43 KB whole-frame against 5–15 KB cropped.
+  Falls back to the whole frame when there is no box.
+
+  The card CSS had to change with it: `object-fit:contain` at `4/3`, not
+  `cover` at `16/9`. These are tight crops of arbitrary shape — a standing
+  person is twice as tall as wide — and `cover` fills the box by cutting the
+  ends off the very object the picture exists to show. Verified in a browser
+  against generated crops shaped tall, wide, square and tiny: every one is
+  fully visible, letterboxed on the axis it doesn't fill.
+
+- **One box per remembered object** (`Robot._one_per_label`). Teach yourself
+  twice — the recommended habit, and the biggest recognition win there is —
+  and every taught view is a memory the detector's *other* boxes can match:
+  the person box, the face box and the torso box all come back "dylan", so one
+  memory is drawn three times over one human. Best match wins: highest score,
+  then salience. Score only moves on a requery (every `REQUERY_SECONDS`), so
+  the winner is stable between them rather than swapping frame to frame the
+  way a salience-only rule would — measured over six frames of salience
+  jitter, the box never moved, and it moved exactly when a requery flipped the
+  scores.
+
+  The losers keep their labels and their tracking; they are simply not drawn,
+  not attended to, and **not written as sightings**, which also stops one
+  object logging a sighting per box. Case-folded like every other label
+  comparison here.
+
+  **The accepted cost, which the operator named himself:** two identical
+  objects in frame — two of the same mug — now show one box between them. The
+  labels are the same string, so there is nothing to tell them apart with, and
+  drawing one name twice was the confusing half of it.
+
+  **The track holding attention keeps its box, whatever the scores say** —
+  and that exception is the whole reason this is an instance method reading
+  `self._incumbent`. Caught by review, not by the tests above, and it is a
+  real trap: dropping a track out of `display` takes it out of `focused`'s
+  candidate list, and `focused` can only retain an incumbent that is still a
+  candidate. So a score flip between two boxes of one object bypassed
+  `FOCUS_MARGIN` *entirely*, and attention did not move to the new winner —
+  it re-derived by raw salience over what was left, which can be a **third
+  object**. Reproduced with stubs: the panel jumped from "dylan" to a mug and
+  back on the requery cadence, with the margin powerless. Anything else that
+  ever filters `display` inherits this; the general rule is that a track
+  holding focus must not be removed from the candidate list by a filter.
+
+  Verified through the real `process_frame` with a stub detector: two "dylan"
+  tracks plus a "mug" draw two boxes, one sighting is written rather than two,
+  the loser keeps its label, two *different* objects are both still drawn, an
+  unknown alongside a duplicated known is still the teach target, attention
+  holds steady across five score flips (it jumped on every one before the
+  fix), the survivor is promoted when the holder's track dies, and the
+  incumbent does **not** freeze a worse match in place forever — lose
+  attention and the best score wins the box again.
+
+### Found by adversarial review of the diff — don't reintroduce these
+
+An independent reviewer read the whole diff afterwards. Everything below was
+already written, tested and believed correct; none of it was found by the
+tests above, which is the same lesson this file has recorded three times now.
+
+- **The rename field made every keystroke a robot command.** The page's global
+  `keydown` listener fires `/key?k=` for `tarfq` and had no target guard, and
+  the new `<input>` bubbles into it. Typing a name is then a string of
+  commands: "water bottle" sends `a`, `t`, `t`, `r` — two voice actions and a
+  **REBOOT of the shard** — `f` deletes whatever the camera is looking at, and
+  `m` closes the sheet, which blurs the field and *commits the half-typed
+  name*. Nearly every English label triggers something. Fixed by bailing on
+  `INPUT`/`TEXTAREA`/`contenteditable` targets; verified in a browser against a
+  stub server (typing `"water bottle from marta"` now produces only the
+  background `/state` polls, and `f` outside a field still works). **Any new
+  text field on this page inherits this trap** — the listener is global.
+  Deliberately tested against a scratch stub and never the live service: if the
+  guard had been wrong, the test itself would have rebooted the operator's
+  shard and deleted whatever was in frame.
+- **`openMem()` racing an in-flight `loadPage()` hid the first page.** Every
+  delete and rename redraws by calling `openMem`, so a page request is very
+  often in flight. `openMem` cleared the list and reset `memAt = 0`, but its
+  own `loadPage()` no-opped on `memBusy`, and then the stale response inserted
+  its old-offset cards into the freshly cleared list and set `memAt` to *its*
+  offset — so objects 1–12 were unreachable until the tab was closed and
+  reopened. Fixed with a generation counter (`memGen`), plus clearing
+  `memBusy` in `openMem` so the fresh page can start immediately; the stale
+  response checks the counter before touching the DOM *or* the flag.
+  Reproduced deliberately (20 objects, `/memories` delayed 1.2 s, page 1 in
+  flight when `openMem` fired) and confirmed: 12 cards, newest first, no
+  duplicates, and paging still reaches `o01` afterwards.
+- **`/ignored` iterated the ignore dict without the lock.** Every mutator
+  (`Q` on the key thread, `/unignore`) holds `self.lock`; the reader did not,
+  so `sorted(self._ignored.values())` could raise `dictionary changed size
+  during iteration` and die as a traceback on the HTTP thread. It now takes
+  the lock and snapshots. The guarantee is structural — all real mutators hold
+  the lock — not proven by the 300-read churn test, which bangs on the dict
+  *without* the lock and is therefore harsher than reality rather than a proof.
+- **`forget_view` trusted the id/label pairing the page sent.** A view already
+  dropped from another tab, re-dropped, counted as "the last view" and forgot
+  the whole object *and its sightings*; and a crafted id could delete any
+  point — a sighting, another object's view — while the log said "dropped one
+  view". Now the pid must be in `taught_ids(label)`, and otherwise the answer
+  is an honest "that view is already gone". Verified against all three cases.
+- Two smaller ones: `/rename` had no server-side length cap (the page's
+  `maxLength=40` was the only limit, so a crafted POST could write an
+  arbitrarily long label onto every point — now capped at 60), and the page
+  refused case-only renames, which made a pre-lowercase `"Water bottle"`
+  impossible to normalize from the tab. Arming DROP and then tapping the
+  picture also used to leave the button armed against a *different* view; the
+  picture disarms it now.
 
 ## Measured baselines on this board
 

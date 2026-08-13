@@ -1,9 +1,10 @@
 """Detection and cadence — the two "new pieces" L6 names but doesn't teach.
 
-YOLOE (prompt-free) finds and crops objects; its labels are discarded —
-detection finds *a thing*, memory tells it *which* thing. Class names are
-consulted only to suppress people/hands/faces, and that suppression is
-sticky per track because classifiers flicker.
+YOLOE (prompt-free) finds and crops objects; its labels are discarded
+entirely — detection finds *a thing*, memory tells it *which* thing. Nothing
+here reads a class name any more: the detector's own vocabulary is not
+consulted for anything, which is the cleanest statement of that idea the code
+has ever made.
 
 Cadence: a track must be stable (N consecutive frames) before it becomes a
 match candidate or teachable, and it re-queries memory every couple of
@@ -31,8 +32,15 @@ except ImportError:  # non-macOS: nothing to drain
 CONF = config.DETECT_CONF   # per-camera, see .env (--conf overrides)
 IMGSZ = 640
 MAX_DET = 64
-# Normalized box-area band: drops speck noise AND oversized phantom/torso
-# regions. Demo objects are hand-held scale, so the cap stays tight.
+# Normalized box-area band: drops speck noise AND the oversized phantom regions
+# a prompt-free detector emits for walls, desks and whole rooms. Demo objects
+# are hand-held scale, so the cap stays tight.
+#
+# Since people stopped being filtered out, this cap is also what decides how
+# close a person can stand and still be teachable. Measured on this camera: a
+# seated person at desk distance is 0.072-0.078 of the frame, comfortably
+# inside the cap, so no calibration change was needed. A face filling the frame
+# is not — back off, or raise DETECT_MAX_AREA and accept more phantom boxes.
 MIN_AREA = 0.0008
 MAX_AREA = config.DETECT_MAX_AREA   # per-camera, see .env (--max-area)
 STABLE_FRAMES = 3
@@ -56,24 +64,11 @@ DEAD_SECONDS = 5.0
 PAD = 0.12         # small margin; the mask removes the background anyway
 FILL = (124, 124, 124)
 
-# People, faces, and body parts are never objects to remember. Word list and
-# matching copied verbatim from memory-fleet's detector (field-tuned there).
-PERSON_WORDS = frozenset(
-    "person people man men woman women boy girl child kid baby human humans face "
-    "faces head hair ear eye eyes nose mouth lip lips chin cheek forehead beard "
-    "mustache moustache neck shoulder arm arms elbow wrist hand hands finger "
-    "fingers thumb fist chest torso waist hip leg legs knee ankle foot feet toe "
-    "toes skin body "
-    "wig ponytail braid bangs afro dreadlock dreadlocks mane haircut hairstyle "
-    "eyebrow eyebrows eyelash eyelashes lash lashes freckle freckles jaw scalp "
-    "sideburn sideburns goatee tongue tooth teeth throat nostril manicure "
-    "businessman fisherman fireman airman craftsman".split()
-)
-
-
-def is_person_like(class_name):
-    return any(w in PERSON_WORDS
-               for w in class_name.lower().replace("-", " ").split())
+# People used to be filtered out here, by matching the detector's class name
+# against a word list. That is gone on purpose: a person is now just another
+# thing to teach and recognize, so "this is Dylan" works exactly like "this is
+# my laptop". See "People are objects now" in CLAUDE.md for what that costs
+# (hands and faces become teachable clutter) and what pays it back.
 
 
 def padded_crop(frame, box, mask=None):
@@ -163,10 +158,12 @@ class Detector:
             self.device = "mps"
         else:
             self.device = "cpu"
-        self.names = self.model.names
         self.tracks = {}
-        self._person_tids = set()
-        self._ignored = set()  # unknowns the operator dismissed ("don't track this")
+        # unknowns the operator dismissed ("don't track this"), tid -> a record
+        # the memory tab can show and undo. A bare set of ids would be enough
+        # to suppress them, but then a mis-tap is invisible and permanent for
+        # the session, which is the same complaint FORGET had.
+        self._ignored = {}
 
     def warm(self):
         dummy = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -174,16 +171,30 @@ class Detector:
             self.model.predict(dummy, device=self.device, imgsz=IMGSZ,
                                verbose=False)
 
-    def ignore(self, tid):
+    def ignore(self, tid, thumb=None):
         """Stop tracking one object for the rest of the session — an unknown
-        the operator doesn't want to teach. Sticky per track id, like the
-        person suppression, so it stays dismissed frame after frame."""
-        self._ignored.add(tid)
+        the operator doesn't want to teach. Sticky per track id, so it stays
+        dismissed frame after frame however the classifier flickers.
+
+        `thumb` is only there so the memory tab can show what was dismissed;
+        nothing in the detector reads it."""
+        self._ignored[tid] = {"tid": tid, "thumb": thumb, "ts": time.time()}
         self.tracks.pop(tid, None)
+
+    def unignore(self, tid):
+        """Undo one ignore. The object comes back on its own if the tracker
+        still holds that id, and otherwise the next time it is proposed under
+        a new one — either way there is nothing to restore here, because an
+        ignored track carries no memory state."""
+        return self._ignored.pop(tid, None) is not None
+
+    def ignored(self):
+        """What has been dismissed this session, newest first."""
+        return sorted(self._ignored.values(), key=lambda d: d["ts"],
+                      reverse=True)
 
     def reset(self):
         self.tracks.clear()
-        self._person_tids.clear()
         self._ignored.clear()
         predictor = getattr(self.model, "predictor", None)
         for tracker in getattr(predictor, "trackers", None) or []:
@@ -210,20 +221,14 @@ class Detector:
         boxes = results.boxes
         polys = results.masks.xy if results.masks is not None else None
         if boxes is not None and boxes.id is not None:
+            # no class column: the detector's labels are not read at all
             rows = zip(
                 boxes.id.int().tolist(),
-                boxes.cls.int().tolist(),
                 boxes.conf.tolist(),
                 boxes.xyxy.tolist(),
             )
-            for i, (tid, cls, conf, box) in enumerate(rows):
-                if tid in self._person_tids or tid in self._ignored:
-                    continue
-                # person check runs before the area band so an oversized face
-                # box still poisons its track id for later, smaller frames
-                if is_person_like(str(self.names.get(cls, ""))):
-                    self._person_tids.add(tid)
-                    self.tracks.pop(tid, None)
+            for i, (tid, conf, box) in enumerate(rows):
+                if tid in self._ignored:
                     continue
                 x1, y1, x2, y2 = box
                 area = (x2 - x1) * (y2 - y1) / (w * h)
@@ -250,9 +255,6 @@ class Detector:
                     t.crop = padded_crop(frame, box, mask)
                     t.crop_q = q
                 seen_tids.add(tid)
-
-        if len(self._person_tids) > 4096:  # ids only grow; keep recent flags
-            self._person_tids = set(sorted(self._person_tids)[-1024:])
 
         for tid, t in list(self.tracks.items()):
             if tid not in seen_tids:
