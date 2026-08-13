@@ -1795,6 +1795,11 @@ class LiveApp:
             else:
                 with self.lock:
                     self.robot.ignore(teachable, self.latest)
+                    # and out of the list the frame pump is drawing from, so
+                    # the box goes on the next composed frame (~0.1 s) rather
+                    # than at the next detect pass. Assigning a new list, not
+                    # editing this one: the pump reads it without the lock.
+                    self.tracks = [t for t in self.tracks if t is not teachable]
                 self.banner = "ignored · undo it in MEMORY"
         elif key == "r":
             with self.lock:

@@ -458,6 +458,16 @@ class Robot:
         vec = track.vec if track.vec is not None else models.embed_crop(track.crop)
         pid = self.memory.ignore(vec, thumb=self._scene(frame, track.box))
         self.detector.ignore(track.tid, pid=pid)
+        # Forget it here too, not just in the detector. Attention is decided
+        # once per detect pass, so a dismissed object otherwise keeps its box
+        # and its panel row until the next one — up to half a second of a
+        # press that visibly did nothing, on top of the wait for this lock.
+        # The same reason FORGET strips labels itself instead of waiting for
+        # a requery.
+        if self.attention is track:
+            self.attention = None
+        if self.teachable is track:
+            self.teachable = None
         self.log("ignored one unknown")
 
     def unignore(self, pid):

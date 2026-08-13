@@ -68,6 +68,60 @@ because the USB-C port does the same job better:
 The only thing a direct cable wins is bulk transfer speed, and the router route
 already gives you that at gigabit.
 
+## What Each Route Asks You For
+
+All four routes authenticate against the same `qdrant` account. There is no
+separate robot account, and nothing is unlocked at boot.
+
+**Boot needs no login at all.** The robot is a system service, not something a
+desktop session starts, so it comes up whether or not anyone signs in. Verified
+on the unit: boot at 13:13:13, `Started l6-robot.service` at 13:13:44, and the
+console login on `tty1` did not happen until 13:14 — a minute *after* the robot
+was already serving. There is no disk encryption (`/etc/crypttab` is empty) and
+the default target is `multi-user.target`, so a screen plugged into a booting
+robot shows a plain `qdrant-robot login:` prompt that nothing is waiting on.
+
+### The ssh key
+
+Installed 2026-08-13 from the laptop, over Ethernet, before the first fully
+headless run:
+
+```bash
+ssh-copy-id qdrant@192.168.1.143
+```
+
+`~/.ssh/authorized_keys` holds one key,
+`SHA256:wFjjRmv1wDNea2syZEY7qlNA87+0BAHaZXQf9Pd1Kno dylan-laptop (ED25519)`. It
+is mode `600` inside a `700` `~/.ssh`; ssh ignores both silently if they are
+looser, which reads as a key that simply does not work.
+
+The key covers **every route at once** — `authorized_keys` does not care which
+interface you arrived on, so the hotspot, the LAN and the USB-C link all take it.
+
+### Password authentication stays on, deliberately
+
+`PasswordAuthentication yes` is still set, and should stay:
+
+- **The serial console is not ssh.** It is a getty, so a key cannot help you
+  there — and serial is the route you reach for precisely when everything else
+  has failed. Turning passwords off would leave the last resort needing a
+  credential the box no longer accepts anywhere else.
+- One key on one laptop is one lost laptop away from nothing.
+
+**Do not run `passwd -d qdrant` to "remove the password".** `sshd` runs with
+`PermitEmptyPasswords no`, so an empty password is not a free login — it is a
+refused one, on all three network routes simultaneously.
+
+### sudo is already passwordless
+
+`/etc/sudoers.d/codex` grants `qdrant ALL=(ALL:ALL) NOPASSWD: ALL`, so nothing
+prompts once you have a shell.
+
+That is also why **`tty1` keeps its login prompt** and there is no autologin
+override: autologin plus passwordless sudo hands root to anyone who plugs a
+keyboard into the unit at a booth, without touching the network. The prompt
+costs nothing, because as above no boot waits on it.
+
 ## The USB-C Debug Port
 
 This is the route that always works, and the one worth practising before you
@@ -240,7 +294,9 @@ In order, from least to most disruptive:
    ```
 
    This is a real console, not a network service, so it works when networking is
-   broken, when the hotspot never came up, and when `sshd` is dead. Leave with
+   broken, when the hotspot never came up, and when `sshd` is dead. It is also a
+   getty rather than ssh, so it wants the account **password** — your key is no
+   help here, which is the whole reason password login stays enabled. Leave with
    `Ctrl-a` then `k`.
 3. **Monitor and keyboard.** Keep them within reach until the unit has completed
    at least one successful cold boot in its case.

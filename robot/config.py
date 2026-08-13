@@ -52,3 +52,10 @@ DETECT_CONF = _number("DETECT_CONF", 0.30)
 # torso-sized and wall-sized phantom boxes; raise it if your camera is far
 # enough away that real objects are small in frame.
 DETECT_MAX_AREA = _number("DETECT_MAX_AREA", 0.20)
+
+# Smallest proposal kept, the other end of the same band. Drops speck noise —
+# and, raised, the small far-away clutter that is technically an object but
+# not what anyone is holding up to the camera. Area, not width: it scales as
+# the SQUARE of how big the thing looks, so 0.001 is only about 12% wider than
+# the 0.0008 this shipped with, not 25%.
+DETECT_MIN_AREA = _number("DETECT_MIN_AREA", 0.001)

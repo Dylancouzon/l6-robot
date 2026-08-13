@@ -26,11 +26,23 @@ WHISPER_MODEL = "whisper-base"
 # text space instead. Dropping it also drops ~2.5 s of first-ask load.
 
 # ONNX Runtime gives every session one thread per core and lets idle threads
-# spin. Four encoders next to the detector would then oversubscribe a Jetson's
+# spin. Every encoder next to the detector would then oversubscribe a Jetson's
 # six cores and starve the camera loop — the feed freezes while Whisper thinks.
-# Two threads each leaves the loop room to keep drawing; it costs Whisper about
-# half a second per utterance.
+# Two threads each leaves the loop room to keep drawing. This is the number for
+# the two EMBEDDERS, which the detect thread calls on its own cadence; the
+# speech model has its own below.
 ENCODER_THREADS = 2
+
+# Whisper gets more, because it is the one model a human waits on and the one
+# that never runs beside another. The embedders above are called from the
+# detect thread every couple of seconds, forever; the ASR session runs only
+# while an action is in flight, and while it runs YOLO is on the GPU and the
+# frame pump is in a driver call. Measured in the live app, release-to-answer
+# on a warm session: 2.82 s at 2 threads, 1.90 s at 4 — and the feed does not
+# notice either way (median gap 102 ms, max 132 ms, no stall over 400 ms in a
+# 20 s window, same as idle). Do not raise it further without re-running that
+# measurement: six threads is every core the board has, and the pump needs one.
+ASR_THREADS = 4
 
 # FastEmbed caches its ONNX files in /tmp by default, and /tmp is swept: on the
 # Jetson, systemd-tmpfiles prunes it at 30 days. That is 1.1 GB of encoders the
@@ -46,8 +58,8 @@ def _sess_options():
     """ONNX Runtime's documented threading controls, for onnx-asr."""
     import onnxruntime as ort
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = ENCODER_THREADS
-    opts.inter_op_num_threads = ENCODER_THREADS
+    opts.intra_op_num_threads = ASR_THREADS
+    opts.inter_op_num_threads = ASR_THREADS
     opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
     return opts
 
@@ -90,9 +102,27 @@ def embed_crop(bgr):
     return next(_clip_vision().embed([img])).tolist()
 
 
+# Whisper's ONNX graph here is the beam-search export, which runs the ENCODER
+# inside it — so onnx-asr's language auto-detection is not a cheap peek at the
+# first few tokens, it is a second full pass over the whole graph. Naming the
+# language skips it outright. Measured on a real 2.1 s utterance, the shipping
+# two-thread session: 5.4 s auto vs 2.7 s with `language="en"`, byte-identical
+# transcript ("Smartphone."). That is half of every teach and every ask.
+#
+# It also removes a failure the journal caught: auto-detection put one English
+# teach into Cyrillic and stored the object as "делан". A demo whose whole
+# script is "this is my ..." has nothing to gain from guessing the language
+# fresh on every utterance.
+#
+# Change this string to teach in another language (onnx-asr takes any Whisper
+# language code); set it to None to pay the second pass and have Whisper guess.
+LANGUAGE = "en"
+
+
 def transcribe(wav_path):
     """Local Whisper speech-to-text on one WAV file."""
-    return _asr_model().recognize(wav_path).strip()
+    kwargs = {"language": LANGUAGE} if LANGUAGE else {}
+    return _asr_model().recognize(wav_path, **kwargs).strip()
 
 
 # warm_encoders is called from two threads per interaction — once at phone
