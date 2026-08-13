@@ -1387,6 +1387,9 @@ class LiveApp:
             # the same card FORGET uses, or the tab looks like it over-deleted
             self.card = ("forgot", (label, n))
             self.banner = f'that was the last view of "{label}" — forgot it'
+        elif n > 1:
+            # a sighting row stands for its burst, so one tap can drop several
+            self.banner = f'dropped {n} photos of "{label}"'
         elif n:
             self.banner = f'dropped one view of "{label}"'
         else:

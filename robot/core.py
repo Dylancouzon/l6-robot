@@ -408,8 +408,12 @@ class Robot:
 
         Sightings are droppable through the same door now — the tab's cycle
         shows them, and a bad auto-saved photo (a stale box, a hand over the
-        object) is as worth removing as a bad teach. Dropping a sighting
-        never cascades: only the last *taught* view takes the object with it.
+        object) is as worth removing as a bad teach. A sighting drop deletes
+        the whole BURST the shown row stands for (forget_sighting_burst):
+        deleting only the shown point promotes a near-identical frame from
+        seconds earlier into the same slot, which reads as a delete that did
+        nothing — measured, not guessed. It never cascades to the object:
+        only the last *taught* view takes the object with it.
 
         The point must actually belong to this object, and that is checked
         here rather than trusted: the id and the label arrive together from a
@@ -429,9 +433,9 @@ class Robot:
             self.log(f'dropped one view of "{label[:18]}"')
             return 1, False
         if pid in self.memory.seen_ids(label):
-            self.memory.forget_point(pid)
-            self.log(f'dropped one sighting of "{label[:18]}"')
-            return 1, False
+            n = self.memory.forget_sighting_burst(pid)
+            self.log(f'dropped {n} sighting photo(s) of "{label[:18]}"')
+            return n, False
         return 0, False
 
     def ignore(self, track, frame=None):

@@ -47,6 +47,12 @@ RECOGNIZE_THRESHOLD = config.RECOGNIZE_THRESHOLD
 # threshold, not absolute, so a recalibrated camera keeps a sane band.
 MAYBE_MARGIN = 0.05
 
+# One "occasion" of being seen: sightings of a label closer together than
+# this are one burst, shown as one row (last_sightings) and deleted as one
+# unit (forget_sighting_burst). Named once because those two MUST agree —
+# a display window wider than the delete window resurrects "deleted" rows.
+SIGHTING_APART = 600
+
 CONFIG = EdgeConfig(
     vectors={
         "text": EdgeVectorParams(size=768, distance=Distance.Cosine),
@@ -450,9 +456,50 @@ class Memory:
             ))
         return hits[0] if hits else None
 
-    def last_sightings(self, label, limit=3, apart=600):
+    def forget_sighting_burst(self, pid, apart=None):
+        """Delete one sighting AND the burst it stands for. Returns how many.
+
+        The tab and recall both show burst-collapsed rows (see
+        last_sightings): one photo represents every sighting of that label
+        within `apart` seconds behind it. Deleting only the shown point
+        therefore does nothing visible — the next frame of the same burst,
+        near-identical and seconds older, slides into its slot. Measured on
+        a copy of the live shard: dropping hat's newest row promoted a frame
+        151 s older from the same burst, same count, same-looking photo —
+        reported as "dropping a view doesn't work". So the unit of deletion
+        is the unit of display: the burst.
+
+        The label comes from the point itself, not the caller, so this can
+        only ever delete sightings of the object the tapped photo actually
+        belongs to. `apart` defaults to the same window last_sightings
+        collapses with — the two must agree or the deleted burst is not the
+        shown burst.
+        """
+        from qdrant_edge import ScrollRequest
+        apart = SIGHTING_APART if apart is None else apart
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="seen")),
+                ])))
+            target = next((r for r in records if r.id == pid), None)
+            if target is None:
+                return 0
+            label = (target.payload.get("label") or "").lower()
+            ts = target.payload.get("ts") or 0
+            ids = [r.id for r in records
+                   if (r.payload.get("label") or "").lower() == label
+                   and ts - apart < (r.payload.get("ts") or 0) <= ts]
+            self.shard.update(UpdateOperation.delete_points(ids))
+            self.shard.flush()
+            return len(ids)
+
+    def last_sightings(self, label, limit=3, apart=None):
         """The newest sightings of one object, newest first and at least
-        `apart` seconds between rows — where it was, as distinct occasions.
+        `apart` (default SIGHTING_APART) seconds between rows — where it
+        was, as distinct occasions.
 
         A scroll and a sort, not a vector search: once the object is chosen,
         "where did I leave it" is a question about time, and the
@@ -468,6 +515,7 @@ class Memory:
         makes the second and third rows carry any information.
         """
         from qdrant_edge import ScrollRequest
+        apart = SIGHTING_APART if apart is None else apart
         with self._lock:
             records, _ = self.shard.scroll(ScrollRequest(
                 limit=10000, with_payload=True,

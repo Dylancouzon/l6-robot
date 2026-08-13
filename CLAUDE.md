@@ -1825,10 +1825,23 @@ Three operator reports after driving rounds 14–15 from the phone:
   the views that are automatically saved"*). `Robot.forget_view` now
   accepts a pid from either list, still verified against the shard:
   `taught_ids` first (unchanged semantics, last-view cascade included),
-  then `Memory.seen_ids` — a sighting drop deletes exactly one point and
-  never cascades. The button now shows on every entry except an object's
-  last taught view, where dropping would mean forgetting and FORGET is the
-  honest button.
+  then `Memory.seen_ids`. A sighting drop never cascades to the object.
+
+  **First shipped as delete-one-point, and that was wrong — reported the
+  same day as "dropping a view doesn't work. Stays at the same count."**
+  The delete worked; it was invisible. The tab and recall show
+  burst-collapsed rows (one photo stands for every sighting within
+  `SIGHTING_APART` of it), so deleting only the shown point promotes a
+  near-identical frame from the same burst into the same slot. Reproduced
+  on a copy of the live shard: dropping hat's newest row (329 sightings)
+  surfaced a frame 151 s older, same count, same-looking photo. The unit
+  of deletion must be the unit of display: `Memory.forget_sighting_burst`
+  deletes the shown row's whole burst — the point's own label bounds it,
+  so a stale page can never delete another object's photos — and the same
+  live-copy scenario now drops 4 photos and surfaces an occasion 833 s
+  older. `SIGHTING_APART = 600` is named once and shared by the collapse
+  and the delete, because a display window wider than the delete window
+  resurrects "deleted" rows.
 
 ### Verified
 
