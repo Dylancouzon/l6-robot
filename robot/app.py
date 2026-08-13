@@ -60,6 +60,7 @@ BG = (246, 244, 240)
 INK = (45, 38, 32)
 RED = (76, 36, 220)      # Qdrant red
 TEAL = (136, 150, 0)
+ORANGE = (30, 140, 235)  # the "maybe" band: close to the bar, not over it
 VIOLET = (255, 71, 96)
 FONT = cv2.FONT_HERSHEY_DUPLEX
 PORT = 8765
@@ -76,7 +77,8 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
 <style>
   /* Same palette as the boxes drawn on the feed (see the BGR constants). */
   :root { --bg:#0b0b0b; --panel:#f0f4f6; --ink:#20262d; --teal:#009688;
-          --violet:#6047ff; --red:#dc244c; --dim:#6b7280; --line:#d9e0e4 }
+          --violet:#6047ff; --red:#dc244c; --dim:#6b7280; --line:#d9e0e4;
+          --orange:#d97706 }
   * { box-sizing:border-box }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
               font-family:system-ui,-apple-system,sans-serif;
@@ -355,13 +357,18 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     $('where').textContent = s.where ? 'here: ' + s.where : '';
     const f = s.focus;
     const known = f && f.label;
-    $('label').textContent = f ? (f.label || 'UNKNOWN \\u2014 hold TEACH')
+    // three states: recognized (teal), a near-miss guess (orange, "hat?" --
+    // close to the bar but under it, still teachable), or unknown (red)
+    $('label').textContent = f ? (f.label ||
+        (f.guess ? f.guess + '? \\u2014 hold TEACH' : 'UNKNOWN \\u2014 hold TEACH'))
                                : 'looking\\u2026';
     $('label').style.background =
-      f ? (known ? 'var(--teal)' : 'var(--red)') : 'var(--dim)';
+      f ? (known ? 'var(--teal)' : f.guess ? 'var(--orange)' : 'var(--red)')
+        : 'var(--dim)';
     $('fill').style.width = (f ? pct(f.score) : 0) + '%';
     $('fill').style.background =
-      f && f.score >= s.threshold ? 'var(--teal)' : 'var(--red)';
+      f && f.score >= s.threshold ? 'var(--teal)'
+        : f && f.guess ? 'var(--orange)' : 'var(--red)';
     $('mark').style.left = pct(s.threshold) + '%';
     $('score').textContent = f && f.score ? f.score.toFixed(3) : '';
     $('thr').textContent = 'bar ' + s.threshold.toFixed(2);
@@ -896,11 +903,16 @@ def draw_feed(frame, tracks, focused):
     for t in tracks:
         x1, y1, x2, y2 = map(int, t.box)
         known = t.label is not None
-        color = TEAL if known else RED
+        # three states, not two: a near-miss (within MAYBE_MARGIN of the
+        # bar) is orange and says which taught object it almost was —
+        # "hat? 0.87" — instead of a bare UNKNOWN. Display only; the track
+        # is still unlabeled, still the teach target.
+        color = TEAL if known else (ORANGE if t.guess else RED)
         thick = 6 if t is focused else 2
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
         if t.last_query:
             tag = (f"{t.label}  {t.score:.2f}" if known
+                   else f"{t.guess}?  {t.score:.2f}" if t.guess
                    else f"UNKNOWN  {t.score:.2f}")
             _chip(frame, tag, (x1 + 4, max(30, y1 - 12)), color)
     return frame
@@ -1239,6 +1251,7 @@ class LiveApp:
             "teachable": teachable is not None and teachable.crop is not None,
             "focus": {
                 "label": focus.label,
+                "guess": focus.guess,  # near-miss label, display only
                 "score": round(focus.score, 3),
                 "note": focus.note,
                 "thumb": Path(focus.thumb).name if focus.thumb else None,

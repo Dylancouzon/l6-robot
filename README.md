@@ -120,6 +120,8 @@ The browser gets the annotated camera feed as MJPEG and polls `/state` for every
 
 The panel shows what the robot is attending to: the label or `UNKNOWN`, the live similarity score against the threshold, the remembered view beside the live one, and the result of the last action. Refusals such as *nothing new to teach* appear as a status line under the panel rather than being painted into the video. `TEACH` dims when there is nothing new in view, so you can see whether it will do anything before you press it.
 
+There is a third state between the two: an **orange box saying `hat? 0.87`** means the nearest taught object scored *close to* the bar but under it (within 0.05). It is a guess, not a recognition — the object is still unknown to the robot, still teachable, and nothing is logged off it. When the thing in the orange box really is your hat, the fix is the usual one: hold TEACH and teach it from this angle too — a miss just under the bar is a coverage problem, not a threshold problem. When it *isn't* your hat, the orange box is showing you exactly the near-matches the threshold exists to keep out (reflective and featureless things live in that band), which is why the bar should not be lowered to admit them.
+
 ### Aiming It
 
 `TEACH` acts on the most prominent **unknown** object; the `F` key acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame. Aiming only has to be good enough for teaching now — deleting is done from the [memory tab](#the-memory-tab), by picking the object off a list.
@@ -220,6 +222,7 @@ The page opens the mic on your first touch anywhere and **keeps it open** while 
 If the browser asks for the microphone every time you use the robot, that prompt is the **browser's**, not the page's — the page asks exactly once per visit and holds on to the mic. Two browser behaviours multiply into "every single time": the default per-site microphone permission is *Ask*, which re-prompts on every fresh page load, and a phone reloads this page more often than it looks, because backgrounding the tab or locking the screen usually evicts it. Make the grant permanent once:
 
 - **iOS/iPadOS (Safari):** with the page open, tap **aA** in the address bar → **Website Settings** → **Microphone** → **Allow**. That is stored per site and survives reloads.
+- **Chrome on iOS:** there is no per-site Allow to set — the prompt on **every press** stops only once the robot's certificate is installed and fully trusted (next section). Chrome on iOS uses the system trust store, so the Safari-based install below fixes Chrome too; until then it re-asks on every microphone use because the origin is untrusted.
 - **Android (Chrome):** the grant is remembered on its own **once the certificate is trusted** (next section) — Chrome deliberately refuses to remember permissions for a site whose certificate it does not trust, so an untrusted cert is what makes the prompt come back.
 
 ### Why HTTPS, And Why The Warning
@@ -230,9 +233,11 @@ The warning appears because nothing vouches for that certificate. It is not a mi
 
 **To get rid of the warning on your own demo phone** — worth doing before filming — install the certificate as trusted, once:
 
-1. Open `https://<lan-ip>:8765/cert.crt` on the phone and accept the warning one last time to download it.
+1. Open `https://<lan-ip>:8765/cert.crt` on the phone and accept the warning one last time to download it. **On iOS this step must be done in Safari** — only Safari hands the file to iOS as an installable profile; Chrome and other iOS browsers just download it to Files, where it installs nothing.
 2. **iOS/iPadOS:** Settings → General → VPN & Device Management → install the downloaded profile. Then, and this step is easy to miss, Settings → General → About → **Certificate Trust Settings** → enable full trust for `l6-robot`.
 3. **Android:** Settings → Security → Encryption & credentials → Install a certificate → **CA certificate** → pick the downloaded file.
+
+On iOS the trust is system-wide: every browser on the phone (Chrome included — they are all WebKit underneath) stops warning, and mic permission grants start being remembered.
 
 Reload the page and the warning is gone for good on that device.
 

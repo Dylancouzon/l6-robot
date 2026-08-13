@@ -65,6 +65,12 @@ The thirteen rounds, newest last — each heading below carries the full story:
     tap-cycle now walks taught views, then recent sightings). See "The
     prompt, the clutter that came back, and the photos the tab couldn't
     show".
+15. **The maybe band, and the mic prompt's real cause** — a score within
+    0.05 under the bar now draws an orange "hat? 0.87" box and panel state
+    instead of a bare UNKNOWN; display only, the 0.90 decision is untouched.
+    The every-press mic prompt turned out to be Chrome on iOS with the cert
+    untrusted; the README now routes the cert download through Safari. See
+    "The maybe band" below.
 
 ## Goal and constraints
 
@@ -1750,6 +1756,53 @@ posting the >2^53 pid as the exact string. Headless replay over `testdata/`
 is byte-identical before/after, and `verify_scores.py` parity is unchanged
 (same-object min 0.887 / med 0.920, different med 0.472 / max 0.611,
 margin +0.275).
+
+## The maybe band — orange between UNKNOWN and recognized
+
+Operator request (2026-08-13, fifteenth round): *"there should be an ignore
+threshold between Unknown and Recognizing? Maybe between 0.85 and 0.90 we
+just show a faint orange box?"* Built as asked — **as display, not as a
+decision**, and that distinction is the whole design.
+
+- `Memory.recognize` returns a third value: the nearest taught label when
+  the top score lands in `[threshold - MAYBE_MARGIN, threshold)`
+  (`MAYBE_MARGIN = 0.05` in `robot/memory.py`, relative to the bar so a
+  recalibrated camera keeps a sane band). `Track.guess` carries it.
+- The box and chip go orange and say `hat?  0.87`; the panel label and the
+  score bar's fill do the same (`--orange`). Teal / orange / red is the
+  full state story now: over the bar, near it, nowhere near it.
+- **A guessed track is still unlabeled.** It is still the teach target,
+  writes no sighting, cannot be forgotten by the F key, and is still
+  checked against the ignore list. `Robot.forget` strips matching guesses
+  off live tracks like it strips labels, so a deleted name doesn't linger
+  a requery beat in orange.
+
+Why this does not reopen the 0.88 question: the round-8 measurement stands
+— acting at 0.88 buys 2 recognitions and 5 mislabels, and the 0.85–0.90
+band is exactly where the mirror-style promiscuous crops live. Showing the
+band is the opposite move to lowering the bar: a hat sitting at 0.87 now
+tells the operator "teach this angle" (coverage, the round-9 lesson), and a
+mirror sitting at 0.87 shows a spectator precisely what the threshold is
+keeping out. If anyone proposes making the guess act on anything — auto-
+label, auto-sight, a softer FORGET — re-read "Objects came and went on a
+static scene" first.
+
+The mic-prompt thread from round 14 also closed this round: the operator
+uses **Chrome on iOS**, which prompts on **every press** while the origin's
+certificate is untrusted, and cannot install the cert itself — iOS only
+installs profiles Safari downloads. README's cert steps now say to fetch
+`/cert.crt` in Safari, and note that the resulting trust is system-wide
+(all iOS browsers are WebKit), which is what makes Chrome start remembering
+the mic grant. No code: there is nothing an app can do about it.
+
+Verified the same way as round 14, against scratch shards only: recognize's
+band edges (0.95 hit / 0.87 guess / 0.80 neither), a guessed track through
+the real `process_frame` (unlabeled, teachable, no sighting, orange
+`draw_feed` path renders), forget stripping a live guess, and the browser
+probe asserting the orange panel state ("hat? — hold TEACH", orange chip
+background) against a stub `/state`. Replay verdicts and score parity
+unchanged (the band never changes a verdict — replay prints label-or-
+UNKNOWN, and guesses are not labels).
 
 ## Measured baselines on this board
 

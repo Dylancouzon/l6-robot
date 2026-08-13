@@ -34,6 +34,19 @@ from qdrant_edge import (
 # any change to the encoders or the crop pipeline — it prints the knee.
 RECOGNIZE_THRESHOLD = config.RECOGNIZE_THRESHOLD
 
+# The "maybe" band under the bar: a nearest-taught score within this margin
+# of the threshold is surfaced as a GUESS — an orange box saying "hat?" —
+# instead of a bare UNKNOWN. Display only, and that is load-bearing: nothing
+# recognizes, logs a sighting, or can be forgotten off a guess, so this does
+# NOT reopen the 0.90 → 0.88 move that was measured and refused (see
+# CLAUDE.md, "Objects came and went on a static scene"). The band is where
+# promiscuous crops live — the mirror read 0.86–0.90 against taught objects
+# — which is exactly why showing it beats acting on it: the operator sees
+# "hat? 0.87" on a hat that needs another taught view, and sees the same
+# chip on a mirror and learns what the bar is for. Relative to the
+# threshold, not absolute, so a recalibrated camera keeps a sane band.
+MAYBE_MARGIN = 0.05
+
 CONFIG = EdgeConfig(
     vectors={
         "text": EdgeVectorParams(size=768, distance=Distance.Cosine),
@@ -374,7 +387,12 @@ class Memory:
             return out
 
     def recognize(self, image_vec):
-        """Nearest taught view vs the threshold. Returns (hit|None, score)."""
+        """Nearest taught view vs the threshold.
+
+        Returns (hit|None, score, guess): `guess` is the nearest taught label
+        when the score lands just under the bar (within MAYBE_MARGIN), and is
+        for display only — the caller must not treat a guess as recognition.
+        """
         with self._lock:
             hits = self.shard.query(QueryRequest(
                 query=Query.Nearest(image_vec, using="image"),
@@ -386,11 +404,13 @@ class Memory:
                 with_payload=True,
             ))
         if not hits:
-            return None, 0.0
+            return None, 0.0, None
         top = hits[0]
         if top.score >= self.threshold:
-            return top, top.score
-        return None, top.score
+            return top, top.score, None
+        if top.score >= self.threshold - MAYBE_MARGIN:
+            return None, top.score, top.payload.get("label")
+        return None, top.score, None
 
     def best_taught(self, text_vec):
         """The taught object whose TRANSCRIPT best matches a question —

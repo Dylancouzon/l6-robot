@@ -145,9 +145,14 @@ class Robot:
         for t in tracks:
             if t.due_for_query(now):
                 t.vec = models.embed_crop(t.crop)
-                hit, score = self.memory.recognize(t.vec)
+                hit, score, guess = self.memory.recognize(t.vec)
                 t.score = score
                 t.label = hit.payload["label"] if hit else None
+                # a near-miss wears an orange "hat?" box instead of UNKNOWN —
+                # display only: a guessed track is still unlabeled, so it is
+                # still the teach target, writes no sighting, can't be
+                # forgotten, and is still checked against the ignore list
+                t.guess = guess
                 t.note = hit.payload["transcript"] if hit else None
                 t.thumb = hit.payload.get("thumb") if hit else None
                 t.last_query = now
@@ -316,6 +321,12 @@ class Robot:
             # have a track wearing the other casing of the same label
             if t.label and t.label.lower() == label.lower():
                 t.label = t.note = t.thumb = None
+                t.requery_now()
+        for t in self.detector.tracks.values():
+            # a guess wearing the deleted name would outlive it for a requery
+            # beat otherwise — same reason the labels above are stripped
+            if t.guess and t.guess.lower() == label.lower():
+                t.guess = None
                 t.requery_now()
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')
         return n

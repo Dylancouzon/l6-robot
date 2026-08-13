@@ -116,6 +116,8 @@ class Track:
         self.crop_q = 0.0
         self.salience = 0.0    # size x centrality: what the robot attends to
         self.label = None      # from memory, never from the detector
+        self.guess = None      # nearest taught label just under the bar —
+                               # display only, never recognition
         self.note = None       # the taught transcript, recalled on match
         self.thumb = None      # the matched taught view, shown next to the live crop
         self.score = 0.0
