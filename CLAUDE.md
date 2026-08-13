@@ -52,9 +52,10 @@ Sixteen rounds of work are compressed here; the full narrative of each is in
 
 ## Repository state
 
-- `/home/qdrant/Documents/github/l6-robot`. PRs #1–#10 merged to `main`.
-- Branch `codex/persistent-ignore-and-sightings` (PR #11): rounds 14–16
-  (persistent ignores, the maybe band, the ASR speedup). Deployed and serving.
+- `/home/qdrant/Documents/github/l6-robot`. PRs #1–#11 merged to `main`.
+- Branch `codex/faster-voice-and-ignore` (PR #12): the ASR speedup, the
+  immediate IGNORE, `DETECT_MIN_AREA`, and this file cut from 2155 lines.
+  Deployed and serving on the unit.
 - Branch `codex/remote-access-doc`: `REMOTE-ACCESS.md`, docs only — how to get
   a shell on the headless unit over three independent routes plus serial, and
   how to move it between Wi-Fi networks. Records that `tmux` was installed.
