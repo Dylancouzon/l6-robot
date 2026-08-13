@@ -6,14 +6,14 @@ conclusion or a milestone completes.
 **Status at 2026-08-12: solved, shipped, and operator-confirmed.** The robot
 runs on the Jetson from a plain `uv` install — no container, no reflash, no
 source-built PyTorch — as a headless appliance on its own 5 GHz hotspot,
-driven from a phone. Eleven rounds of work landed the same day; each has a
+driven from a phone. Thirteen rounds of work landed the same day; each has a
 section below with the measurements. The cold boot the earlier rounds flagged
 as unproven has since happened: the box booted at 13:13 into
 `multi-user.target` and the service was serving 14 seconds later. The operator
 teaches by phone, so the HTML panel and the voice path are confirmed in daily
 use.
 
-The eleven rounds, newest last — each heading below carries the full story:
+The thirteen rounds, newest last — each heading below carries the full story:
 
 1. **Startup memory** (not CUDA) made the view update every 15 s — lazy
    encoder loading fixed it. See "The problem and the fix".
@@ -47,6 +47,17 @@ The eleven rounds, newest last — each heading below carries the full story:
 11. **People stopped being filtered out** — the person blacklist is deleted, so
     "this is Dylan" works like any other teach; the tab also gained RENAME and
     DROP THIS VIEW. See "People are objects now".
+12. **"The system slowed down a lot"** — two findings, one fix each way: the
+    slowdown itself was a laptop routing its internet through the hotspot
+    (documentation, not code), and the review it prompted found the memory
+    tab waiting 0.8–1.6 s behind YOLO for half-millisecond reads (code). The
+    tab also gained SET LOCATION. See "The slowdown, the lock, and the
+    location button".
+13. **"Where did I leave my hat?" answered "dylan"** — recall was searching
+    the image space with the words of the question, and that ranking is
+    measured noise. Recall now picks the object in the text space and
+    answers with its last three sightings by time; the SEEN/HEARD split and
+    CLIP's text tower are gone. See "Recall answered from the wrong space".
 
 ## Goal and constraints
 
@@ -67,15 +78,18 @@ The eleven rounds, newest last — each heading below carries the full story:
 ## Repository state
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
-- PRs #1–#8 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
-  headless appliance, streaming + voice, HTML panel, track lifetime + focus)
-  are all **merged** into `main` as of 2026-08-12. Their rationale lives in
-  the sections below — including #8's **refusal** of a threshold move to 0.88
-  on measurement, which is the part to read before anyone tries it again.
-- Branch: `codex/memory-tab` (PR #9), off `main`: the work under "The memory
-  tab", "People are objects now" and the two rounds of review fixes below. No
-  new dependencies, and additive to the payload — a shard written before it
-  still opens and still lists, showing crops where it has no scene.
+- PRs #1–#9 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
+  headless appliance, streaming + voice, HTML panel, track lifetime + focus,
+  memory tab + people as objects) are all **merged** into `main` as of
+  2026-08-12. Their rationale lives in the sections below — including #8's
+  **refusal** of a threshold move to 0.88 on measurement, which is the part
+  to read before anyone tries it again.
+- Branch: `codex/recall-and-location` (PR #10),
+  off `main`: rounds 12–13 and their follow-ups — "The slowdown, the lock,
+  and the location button" and "Recall answered from the wrong space"
+  below. No new dependencies; one deletion of consequence (CLIP's text
+  tower) and one new file beside the shard (`where.txt`), both additive to
+  existing shards.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -102,7 +116,9 @@ of residency, so it saved ~3 s of load time for 1.7 GB.
 The fix, all in `robot/models.py` plus one call-site change:
 
 - `warm_up()` loads **only the CLIP vision encoder**, the one model the camera
-  loop uses per frame. The other three load lazily on first use via `lru_cache`,
+  loop uses per frame. The others load lazily on first use via `lru_cache`
+  (four encoders then; three since CLIP's text tower was deleted — see
+  "Recall answered from the wrong space"),
   hidden under the button hold.
 - `ENCODER_THREADS = 2` with spinning disabled, via FastEmbed's `threads`
   parameter and onnx-asr's `sess_options`. Both are documented public options.
@@ -921,7 +937,8 @@ Anyone who wants the blink itself gone has to make detection steadier (a lower
   accident: `focused()` returns None on an empty candidate list without clearing
   the incumbent, so an object that blinks while nothing else is teachable
   resumes focus when it returns.
-- **Nomic loads outside the lock.** `models.warm_encoders(kind)` is called in
+- **Nomic loads outside the lock.** `models.warm_encoders` (then taking a
+  `kind` argument, since removed) is called in
   `_process` after `transcribe` and before `with self.lock:`. Both loaders are
   `lru_cache`d, so it is the same work relocated. It matters because Nomic's
   first load is ~4 s and paying it under the lock stalls the detect thread long
@@ -989,7 +1006,7 @@ measured), and a smaller Whisper mishears more.
 
 What WAS cut: the first voice action of a session paid ~7 s of model loads
 (Whisper ~2.7 s + Nomic ~4 s, measured 7.1 s together) *after* the finger
-lifted. `on_listen` (the phone path) now starts `models.warm_encoders(kind)`
+lifted. `on_listen` (the phone path) now starts `models.warm_encoders`
 on a daemon thread at pointerdown, so those loads run under the button hold.
 Trap that makes the lock necessary: **`lru_cache` does not serialize a cache
 miss**, so the pointerdown warm and `_process` calling the same loaders
@@ -1413,6 +1430,234 @@ tests above, which is the same lesson this file has recorded three times now.
   impossible to normalize from the tab. Arming DROP and then tapping the
   picture also used to leave the button armed against a *different* view; the
   picture disarms it now.
+
+## The slowdown, the lock, and the location button
+
+Reported as "the codebase grew and the system slowed down a lot" (2026-08-12,
+twelfth round), with a full performance and hygiene review requested. The
+review measured first and found the slowdown was not the code — and then
+found a real code-side wait the report had not named.
+
+### The slowdown was the hotspot doing NAT for a laptop
+
+Mid-review the operator noticed it himself: his laptop was joined to
+`l6-robot` while the robot had Ethernet, so the hotspot's documented
+internet-sharing (nm-shared + MASQUERADE, see "Headless appliance") was
+routing the laptop's entire internet through the robot's radio — background
+sync and all, on the same 5 GHz HT20 link as the ~17 Mbps feed. He
+disconnected the laptop and "now its smooth". The robot measured healthy
+throughout: 9.7 fps on loopback, CPU ~186%, zero process swap, RSS 4.2 GB.
+This is the 2.4 GHz lag story from "Streaming over the hotspot" again, with
+the demand coming from a guest this time; TCP queues, the feed falls behind,
+the robot looks slow. Fix is operator-facing and now in the README twice
+(Headless Appliance, The Feed Is The Bottleneck): don't leave a laptop on the
+hotspot. Phones dodge it by preferring cellular. Disabling the passthrough
+was considered and not done — it is also the maintenance path, and a fixed
+warning beats machinery.
+
+### What the review did find: tab reads queued behind YOLO for no reason
+
+Measured on the live service: `/state` (no lock) answers in 10 ms median;
+`/memories` took **809 ms median, 1.6 s max**, and `/ignored` — a trivial
+dict read — 0.45–1.6 s. But the scan `/memories` runs costs **0.5 ms** on
+this shard (benchmarked on a copy). The entire difference was waiting for
+`self.lock`, which the detect thread holds for a whole YOLO pass — and lock
+wakeups are not FIFO, so a waiter can lose more than one round. Every tab
+open, delete and rename paid it, twice (both endpoints), because every
+mutation redraws the tab.
+
+Two changes, both making reads not need the big lock rather than making the
+lock free faster:
+
+- **`Memory` now serializes its own shard access** with an internal `RLock`
+  (every method that touches `self.shard`, including `reopen`/`close`, which
+  were the documented reason the tab needed the app lock at all). The
+  app-level lock still serializes compound robot mutations exactly as
+  before; `memories()` just no longer takes it. RLock because compound reads
+  nest (`objects` → `count_label`). Lock order is always app lock → memory
+  lock, never the reverse, so no deadlock is possible.
+- **`Detector._ignored` is copy-on-write**: mutators replace the dict, never
+  edit it, so `/ignored` iterates a snapshot without any lock. Both mutators
+  (Q on the key thread, `/unignore` on HTTP) still run under the app lock,
+  which is what keeps writers from racing each other.
+
+Verified against a scratch shard: with the app lock deliberately held for
+2 s, `/memories` + `/ignored` together answer in **5.3 ms** (was 0.8–1.6 s
+each). A 4-reader/1-writer hammer with `reopen()` mixed in raises nothing.
+
+Closed as measured-harmless, so nobody re-suspects them: `memory.count()`
+per detect pass costs 0.15 ms even at 6000 points; `objects()` is 24 ms and
+`forget`'s full scroll 25 ms at that size (benchmarked on a grown copy — the
+harness is `bench/bench.py` in the session scratchpad). Shard growth is not
+what anyone is feeling. Dependency and import hygiene also came back clean:
+nothing unused in `pyproject.toml` (matplotlib arrives via ultralytics), no
+dead imports, no dead functions found.
+
+### SET LOCATION — the tab edits where the robot is
+
+`--location` was the only way to set the place stamped on memories, which on
+the appliance means editing the service file. The memory tab's first row now
+shows `here: <place>` with SET LOCATION / CHANGE; it POSTs `/where`, which
+normalizes and caps at 60 chars server-side exactly like `/rename` and for
+the same reason. Empty clears it. `Robot.set_where` logs it; the banner
+confirms it.
+
+- **Persisted in `edge-data/where.txt`**, read at `Memory` init. Beside the
+  shard, not in `.env`: it is state that travels with the memories, not
+  calibration. The appliance's off switch is a power cut, so a
+  session-only value would silently revert to the service file's idea of
+  home and stamp a booth's memories with the living room.
+- **Precedence: `--location` still wins for the run** and does NOT rewrite
+  the file — consistent with the config philosophy (flag = one-run A/B).
+  The button writes both the live value and the file.
+- Old points keep the place they were written at. That is the feature —
+  "where are my keys" answers where it saw them — and it is why this is a
+  stamp, not a payload migration.
+- The new text field inherits the global-keydown trap recorded under "People
+  are objects now"; the existing INPUT-target guard covers it, and the
+  browser probe proves typing in it fires no `/key` calls. One new trap of
+  its own: a page landing from an infinite-scroll fetch redraws the row, so
+  `drawLoc` is skipped while the field holds focus or it would throw away
+  the operator's typing mid-word.
+
+Verified: server-side persistence/precedence/normalization plus the
+2-second-lock-hold latency test (`bench/test_where.py` in the session
+scratchpad, against a scratch copy — never the live shard), score parity
+byte-identical (same-object min 0.887 / med 0.920, different med 0.472 /
+max 0.611, margin +0.275), replay verdicts unchanged, and a headless-firefox
+probe of the real page against a stub server driving the full edit flow.
+
+## Recall answered from the wrong space
+
+Reported (2026-08-12, thirteenth round): *"Where did I leave my hat?"*
+answered **dylan**, with hat second; the operator also asked why the panel
+shows a SEEN and a HEARD list when the heard entries are just the teaching
+sentences, and proposed answering with the last three sightings of the best
+match. He was right on all three, and the first one is measurable.
+
+### Why dylan beat hat: the ranking was noise
+
+Recall embedded the whole question with CLIP's TEXT tower and searched the
+IMAGE vectors of everything seen today. Reproduced on a shard copy with the
+operator's exact question:
+
+| space searched | top scores |
+|---|---|
+| CLIP text → image vectors (what shipped) | 0.262, 0.259, 0.258, 0.256… — hat and dylan interleaved in one flat 0.246–0.262 band |
+| Nomic question → taught transcripts | **hat 0.725**, dylan 0.424, mirror 0.388 |
+
+CLIP text-to-image over a full interrogative sentence separates nothing;
+the daily winner is lottery, and the lottery favors whoever has the most
+tickets — dylan had 62 sightings that day, so dylan often topped it. The
+text space, by contrast, is language-vs-language and lands on the right
+object by a 0.3 margin even against bare-noun transcripts ("Hat.").
+
+### What recall is now
+
+`Robot.ask` is two steps: **pick the object in the text space**
+(`Memory.best_taught`, question vs taught transcripts), then **answer with
+its newest sightings by time** (`Memory.last_sightings`) — a scroll and a
+sort, no vector search, because once the object is chosen "where did I
+leave it" is a question about time, not similarity. Three rows, each with
+time, place and the logged crop; the spoken line reads them out ("I saw hat
+at 10:44 PM. Before that at 10:34 PM and 10:22 PM."). Not day-filtered,
+deliberately: keys left yesterday are the whole use case, and `_when()`
+names the day for anything older than today.
+
+- **The rows are episodes, not log lines.** A sighting is written per track
+  birth, so an object sitting in view logs bursts — the raw newest three
+  read "at 10:42, before that at 10:42 and 10:42" (observed). `last_sightings`
+  keeps the newest of each burst, minimum 600 s apart (`apart=`).
+- **"What did you see today?" stays**, as an inventory rather than a
+  search: distinct labels sighted since morning (`Memory.seen_since`), no
+  vectors at all. Same phrase check as before, same card shape.
+- **SEEN/HEARD is gone from the panel** — one list. The heard column was
+  the taught transcripts (only taught points carry text vectors), i.e. the
+  definitions, as the operator said.
+- **CLIP's text tower is deleted** (`_clip_text`, `embed_query_clip`,
+  `CLIP_TEXT_MODEL`), since this was its only caller. `warm_encoders` lost
+  its `"t"/"a"` split — both actions now need the same two models — and
+  first-ask load drops by that model's ~2.5 s. `headless-setup.sh`'s cache
+  pre-fill was the easy-to-miss second caller (the `verify_scores.py`
+  lesson again: grep for other builders before deleting a loader).
+- `day_recall` and `_dedupe_by_label` are deleted with it. If anyone wants
+  the cross-modal image-space search back as a course beat, it is one git
+  revert away — but re-read the table above first: it was measured not
+  working, on the very question the demo script asks.
+- The empty-shard answers are honest now: "You haven't taught me anything
+  yet." / "I know hat, but I haven't seen it around." instead of "I didn't
+  see anything like that today."
+
+Also observed while investigating, distinct problem, no code change: one of
+dylan's three taught views is a picture of the background with dylan gone —
+a stale-box teach (the one-blink window under "UI responsiveness", or a
+walk-away during the hold). A background view wearing a person's name is a
+memory that matches empty desk, which both inflates that label's sightings
+and feeds it junk crops. The cure is the button built for it: open the
+card, tap the picture until the background view shows, DROP THIS VIEW.
+
+Verified: `bench/test_ask.py` (session scratchpad) against a scratch copy —
+right label at 0.72+, rows newest-first and ≥600 s apart, inventory
+distinct, empty-shard refusals; score parity and replay byte-identical to
+the pre-change run; browser probe of the new card against a stub server.
+
+### Follow-ups from first use, same evening
+
+Four operator reports after driving the new recall from the phone:
+
+- **Sightings now store the scene-style picture** (box + margin, unmasked —
+  `Robot._scene`), not the masked gray recognition crop: recall shows these
+  rows to a human, and "where did I leave it" answered with a fragment on a
+  gray void. Same payload key, so old sightings keep their old crops with
+  no migration; they just look gray next to new ones, exactly like
+  pre-scene taught views do in the tab.
+- **The recall card's rows grew up**: the object's name above a 150 px
+  4/3 `contain` picture (`.sight` in the CSS), same reasoning as the tab's
+  cards — `cover` cuts the ends off the object the picture exists to show.
+- **SET LOCATION zoomed the page in on iOS and never zoomed back.** iOS
+  Safari zooms onto any focused input whose font-size is under 16px, and
+  does not undo it when the field goes away. The rename field never
+  triggered it (.edit is 17px); the location field's 14px override did.
+  It is 16px now, and the comment above it says why: **any input added to
+  this page needs ≥16px font**, or it inherits the bug.
+- **"Why are ignored items deleted?" — they aren't.** `Detector._ignored`
+  is session-only by design (nothing is stored for an ignored object, which
+  is what makes IGNORE free to undo), and the service was restarted twice
+  that evening to ship these rounds — each restart empties the list. Not a
+  regression; recorded so the next person doesn't hunt for a delete that
+  doesn't exist.
+- And one more lock the measurement said to drop: **`ask` no longer takes
+  the app lock** in `_process` — it reads only memory (which serializes
+  itself) and touches no track state, so the app lock bought nothing but up
+  to a second of queueing behind a YOLO pass on an answer the operator is
+  watching for. The remaining ~6 s of ask latency is Whisper's documented
+  floor ("Teach latency" above): do not chase it.
+
+### Found by adversarial review of rounds 12–13, one fixed
+
+- **`where.txt` broke the "does a shard exist" heuristic from inside the
+  same `__init__` that reads it.** `Memory` treated ANY file in the data
+  dir as proof a shard exists and called `EdgeShard.load` — so a dir
+  holding only `where.txt` (segments hand-deleted, a restore that died
+  early) crashed every boot, presenting as a `Restart=always` loop on a
+  headless box. `thumbs/` had the same latent property all along; the
+  location file just made it two producers. Fixed by excluding the app's
+  own two benign files from the check, keeping the fail-loud behaviour for
+  anything unrecognized. Verified both directions on scratch dirs. Side
+  effect worth knowing: a hand-wiped shard dir now boots fresh and keeps
+  its location.
+- Noted, deliberately not fixed — all pre-existing, all already documented
+  where they live: the `busy` check-and-set is still non-atomic (one
+  operator, actions seconds apart); `banner`'s seq bump is not atomic
+  across its many writer threads (worst case is one banner shown late, on
+  a race measured in bytecodes); `startswith` routing still depends on
+  `/forget_view` preceding `/forget`; `count_label` is exact-case while
+  everything else case-folds (a cosmetic count, wrong only on unmigrated
+  pre-lowercase shards); and `_one_per_label` reading `focused()`'s
+  incumbent is the documented display-filter trap, enforced by prose, not
+  code. Each is a real cost the smallest-change rule keeps choosing to pay;
+  fix them when one of them actually fires, and update this list when you
+  do.
 
 ## Measured baselines on this board
 

@@ -62,7 +62,7 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
   uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
   ```
 
-- **Only the CLIP vision encoder loads at startup** (see `warm_up` in `robot/models.py`). Speech and text encoders load the first time you teach or ask. Loading all four up front needs about 3.3 GB before the camera even opens, which pushes the board into swap — and a swapping robot updates the view once every several seconds. Expect roughly 2.5 GB after startup and 4 GB once you have taught something.
+- **Only the CLIP vision encoder loads at startup** (see `warm_up` in `robot/models.py`). Speech and text encoders load the first time you teach or ask. Loading everything up front needs about 3.3 GB before the camera even opens, which pushes the board into swap — and a swapping robot updates the view once every several seconds. Expect roughly 2.5 GB after startup and 4 GB once you have taught something.
 
 - **Keep the stock 15 W power mode.** The bottleneck here is memory and the USB camera, not the GPU, so `jetson_clocks` and MAXN buy nothing.
 
@@ -84,7 +84,7 @@ The same two commands work. Four things are worth knowing on the 8 GB board:
 | Control | Action |
 |---|---|
 | `T` / hold **TEACH** | Teach the focused unknown object by voice |
-| `A` / hold **ASK** | Ask a voice question, such as "what did you see today?" |
+| `A` / hold **ASK** | Ask a voice question. "Where did I leave my hat?" answers with the last three times it saw the hat — time and place each — and "what did you see today?" lists the day's objects. |
 | `M` / **MEMORY** | Everything it knows, with pictures — and where you delete things |
 | `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
 | `F` | Delete what it knows about the focused recognized object — keyboard only |
@@ -108,6 +108,7 @@ Two controls have no button. `R` is a presenter's beat rather than a control —
 - **RENAME fixes the name without touching the vectors.** Whisper mishears a bare noun — a real capture of "laptop" came back as `La-caw` — and until this existed the only cure was to forget the object and teach it again, throwing away good views because the *word* was wrong. Tap RENAME, type, press Enter. Renaming onto a name that already exists merges the two objects, which is how you fix `Laptop` and `laptop` having become separate things.
 - **FORGET on a card takes two taps.** The first arms it, the second deletes. It removes every point for that object, taught views and sightings alike, and it cannot be undone.
 - **DROP THIS VIEW deletes just the view you are looking at**, and appears only on objects that have more than one. This is the cure for a single bad teach — a blurred crop, or one that caught the desk instead of the mug — which otherwise sits in memory forever matching things it shouldn't. Tap the picture until the bad one is showing, then drop it. Dropping the last remaining view forgets the whole object instead, so its sightings don't outlive it in recall.
+- **The first row says where the robot is, and SET LOCATION changes it.** The location is stamped on every memory written from then on, and recall reads it back — *"I saw my keys at 2:14 PM, in the hotel room"*. It persists across power cuts (it is stored beside the memories), so set it once when the robot moves venues. Memories already written keep the place they were taught at, which is the point: "where are my keys" should answer where it saw them, not where the robot is now. `--location` on the command line still overrides it for a single run.
 - **Ignored objects are listed at the bottom**, with a picture each and a **TRACK AGAIN** button. `Q` / **IGNORE** used to be a one-way door for the rest of the session, with nothing on screen to say what had been dismissed. Nothing was ever stored for these, so un-ignoring simply lets the object be proposed again.
 - The list pages in as you scroll, and the video feed is dropped while the tab is open — on the appliance's own Wi-Fi the feed is most of the radio, and none of it is visible behind the tab.
 
@@ -138,7 +139,7 @@ The first three are per-camera settings whose permanent home is `.env`; the flag
 | `--threshold 0.90` | Recognition bar: the nearest taught view must score at least this to count as a match. `.env` `RECOGNIZE_THRESHOLD`. See [Calibrating For Your Camera](#calibrating-for-your-camera). |
 | `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. `.env` `DETECT_CONF`. |
 | `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. `.env` `DETECT_MAX_AREA`. |
-| `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). |
+| `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). Overrides, for this run only, whatever **SET LOCATION** in the [memory tab](#the-memory-tab) stored — the tab's value persists in the data dir. |
 | `--reset` | Wipe all memories before starting, for a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
 | `--camera 1` | Use a different webcam. |
 | `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
@@ -187,6 +188,8 @@ Teach it while it is still in view. A box outlives its object by a fraction of a
 ### What to say
 
 **Speak a phrase, not a single word.** "This is my laptop" is recognized reliably; "laptop" on its own often is not. Whisper-base leans on surrounding words to pin down a short one, and a bare noun gives it nothing to lean on — a real capture of one isolated word came back as `La-caw`. The phrase is also what `parse_label` is built to read: it takes the words after "this is" and stops at the first new clause, so *"This is my mug, Maria made it"* teaches `my mug`.
+
+**The words you teach with are what questions match against.** "Where did I leave my hat?" finds the hat by comparing the question to the sentence you spoke when teaching it, then answers with the last few times it saw it. A phrase ("this is my hat") therefore helps twice: Whisper hears it better, and questions about the object land on it more surely.
 
 **Release the button when you stop talking.** Holding it open for a few extra seconds used to cost twice: Whisper charges for every second of audio, and given a stretch of silence it starts repeating itself — a 7.7 s hold around 1.4 s of speech transcribed to `L L L L L L…` and took 16.3 s. Silence is now trimmed off both ends before transcription (2.0 s and 5.2 s for that same clip), so a long hold costs you little — **as long as the robot can find your speech in it**. Speak up: the trim looks for audio above a fixed bar, and a hold too quiet to clear it is passed to Whisper whole, repeated letters and all. The `rms` in the log is the number to watch.
 
@@ -267,6 +270,8 @@ Set your own network name and password by running the script with them: `sudo SS
 
 **Your phone keeps its cellular service.** Joining the robot only takes over the phone's Wi-Fi; both iOS and Android keep sending internet traffic over mobile data once they notice the robot's network has no internet path. iOS says "No Internet Connection" under the network name and works fine. On Android, *Settings → Network & internet → Internet → "Switch to mobile data automatically"* is the one setting that can drop the Wi-Fi association outright; turn it off for that phone if it misbehaves. And when the robot happens to have Ethernet plugged in, its hotspot shares that connection, so there is real internet on it too.
 
+**That sharing cuts both ways — don't leave a laptop joined to the hotspot.** A laptop treats the robot's network as its internet connection whenever Ethernet gives the hotspot one, so every background sync, update and cloud backup it runs is routed through the robot's radio — the same radio carrying the video feed. The feed then lags exactly as described under [The Feed Is The Bottleneck](#the-feed-is-the-bottleneck), and nothing on the robot is at fault: disconnect the laptop and it clears immediately. (Confirmed on this unit: the robot measured a healthy 9.7 fps locally throughout one such "slowdown".) Phones mostly dodge this by keeping their traffic on cellular; laptops do not.
+
 ### Turning It On And Off
 
 There is no power button, and the Jetson does not need one: *"By default, Jetson Orin Nano Developer Kit turns on automatically as soon as the included DC power supply is connected to the DC power jack"* ([user guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/howto.html)). Plugging the case in is the on switch.
@@ -327,6 +332,8 @@ That number is why the hotspot is on 5 GHz. A 2.4 GHz access point at 20 MHz car
 
 The trade is range. 5 GHz carries less far and through less material, so keep the phone in the same room as the robot rather than across a hall.
 
+The radio is also shared with whatever else joined the hotspot. When Ethernet is plugged in, the hotspot carries real internet, and a **laptop** joined to it will happily route all its background traffic through the robot — which lags the feed with nothing on the robot at fault. Disconnect it; details under [Headless Appliance](#headless-appliance).
+
 If the feed still lags — an unavoidably crowded band, or a client stuck on 2.4 GHz — the one number to turn is `STREAM_QUALITY` in `robot/app.py`. Dropping it from 85 to 70 costs about a quarter of the bytes, for a slightly softer image. Measure before and after rather than trusting a figure from another scene: JPEG size depends far more on what the camera is pointed at than on anything in the code. Check what you are actually up against first:
 
 ```bash
@@ -343,7 +350,7 @@ The second command measures what the robot *wants* to send, over loopback, with 
 | `robot/app.py` | Browser UI, phone controls, live mode, and replay mode |
 | `robot/core.py` | Main robot loop |
 | `robot/detect.py` | YOLOE detection, tracking, and cadence gating |
-| `robot/memory.py` | Qdrant Edge teach, recognize, and day-recall logic |
+| `robot/memory.py` | Qdrant Edge teach, recognize, and recall logic |
 | `robot/models.py` | Embedding and speech model setup |
 | `robot/config.py` | Per-camera settings, read from `.env` |
 | `deploy/` | `headless-setup.sh` and the systemd unit that make it an appliance |

@@ -128,10 +128,17 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   .card { border:2px solid var(--dim); border-radius:10px; padding:10px 12px;
           margin-top:16px }
   .card h2 { font-size:13px; letter-spacing:.1em; margin:0 0 8px }
-  .row { display:flex; gap:8px; align-items:center; margin-top:8px;
-         font-size:14px }
-  .row img { width:46px; height:46px; object-fit:cover; border-radius:6px;
-             background:var(--line) }
+  /* One recall sighting: the object's name above a memory-tab-style picture
+     (box + margin, contain not cover -- same reasoning as the tab's cards:
+     these are tight crops of arbitrary shape, and cover would cut the ends
+     off the object the picture exists to show). */
+  .sight { margin-top:12px; font-size:14px }
+  .sight .lbl { font-weight:700 }
+  .sight .shot { display:flex; gap:10px; align-items:flex-start;
+                 margin-top:4px }
+  .sight .shot img { width:150px; aspect-ratio:4/3; object-fit:contain;
+                     border-radius:8px; background:var(--line);
+                     flex:0 0 auto }
   .meta { font-size:12px; color:var(--violet) }
   #log { margin-top:18px; font-size:12px; color:var(--dim); line-height:1.7 }
   /* Reserve the row permanently and toggle visibility, never display. Toggling
@@ -229,6 +236,19 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   .obj button[disabled] { opacity:.5 }
   .edit { width:100%; font-family:inherit; font-size:17px; font-weight:700;
           padding:3px 5px; border-radius:6px; border:2px solid var(--violet) }
+  /* The location row: where the robot is, editable, first row of the grid.
+     Every button style in this sheet is scoped (.obj button, #memclose), so
+     this one needs its own or it renders as bare white-on-white text. */
+  #loc { grid-column:1/-1; display:flex; align-items:center; gap:10px;
+         min-height:40px; font-size:14px; color:var(--ink) }
+  #loc button { flex:0 0 auto; min-height:36px; padding:0 12px;
+                font-size:12px; background:#fff; color:var(--violet);
+                border:2px solid var(--violet); border-radius:12px }
+  /* 16px is load-bearing, not taste: iOS Safari zooms the page in on any
+     focused input whose font is smaller, and does not zoom back out when
+     the field goes away. The rename field never triggered it because .edit
+     is 17px; this one at 14px did. */
+  #loc .edit { flex:1; font-size:16px; font-weight:400 }
   /* display:contents so the ignored cards join the same grid as the objects
      above them instead of stacking inside one cell. */
   #igns { display:contents }
@@ -397,23 +417,25 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       const h = el('h2', 'RECALL'); h.style.color = 'var(--violet)';
       card.append(h, el('div', 'Q: \\u201c' + c.q + '\\u201d'));
       card.append(el('div', c.say, 'meta'));
-      for (const [title, hits] of [['SEEN', c.seen], ['HEARD', c.heard]]) {
-        if (!hits.length) continue;
-        const t = el('h2', title); t.style.margin = '12px 0 0';
-        card.append(t);
-        for (const hit of hits) {
-          const row = el('div', null, 'row');
-          if (hit.thumb) {
-            const im = el('img'); im.src = '/thumb?f=' + hit.thumb;
-            im.style.opacity = 1; row.append(im);
-          }
-          const col = el('div');
-          col.append(el('div', hit.when + ' \\u00b7 ' + (hit.what || hit.label || 'unknown')));
-          const tail = (hit.where ? hit.where + ' \\u00b7 ' : '') + 'score ' + hit.score;
-          col.append(el('div', tail, 'meta'));
-          row.append(col);
-          card.append(row);
+      // the object's last sightings, newest first (or, for "what did you
+      // see today?", one row per object): the name above a memory-tab-style
+      // picture, with when and where beside it. The SEEN/HEARD pair this
+      // replaces is described in CLAUDE.md, "Recall answered from the
+      // wrong space".
+      for (const hit of c.hits) {
+        const s = el('div', null, 'sight');
+        s.append(el('div', hit.label || 'unknown', 'lbl'));
+        const shot = el('div', null, 'shot');
+        if (hit.thumb) {
+          const im = el('img'); im.src = '/thumb?f=' + hit.thumb;
+          im.style.opacity = 1; shot.append(im);
         }
+        const col = el('div');
+        col.append(el('div', hit.when));
+        if (hit.where) col.append(el('div', hit.where, 'meta'));
+        shot.append(col);
+        s.append(shot);
+        card.append(s);
       }
     }
     box.append(card);
@@ -538,6 +560,9 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   const PAGE_N = 12;
   const igns = el('div');
   igns.id = 'igns';
+  const loc = el('div');
+  loc.id = 'loc';
+  let locWhere = null;
   let memAt = 0, memMore = true, memBusy = false, memGen = 0;
 
   function openMem() {
@@ -545,7 +570,8 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     // Let go of the video: on the robot's own hotspot the feed is most of the
     // radio, and every byte of it is now behind an opaque sheet.
     paused = true; img.removeAttribute('src');
-    $('memlist').replaceChildren(igns);
+    $('memlist').replaceChildren(loc, igns);
+    drawLoc();
     // A page fetched before this reload must not land in the list after it.
     // openMem is how every delete and rename redraws, so there is very often
     // one in flight: without the generation counter the stale response inserts
@@ -577,6 +603,10 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       $('memmeta').textContent =
         r.total + ' object' + (r.total === 1 ? '' : 's') + ' \\u00b7 ' +
         r.points + ' points';
+      locWhere = r.where || null;
+      // never redraw over an edit in progress: a scroll can land a page
+      // while the field is focused, and replacing it throws the typing away
+      if (!loc.contains(document.activeElement)) drawLoc();
       const list = $('memlist');
       // insertBefore, not append: the ignored section lives at the end of the
       // same grid and must stay there as pages arrive above it.
@@ -639,6 +669,51 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   }
 
   const post = url => fetch(url, { method: 'POST' }).catch(() => {});
+
+  // ---- location: where the robot is -----------------------------------
+  // Stamped on every memory written from here on, and read back by recall
+  // ("I saw my keys at 2:14 PM, in the hotel room"). --location on the
+  // command line was the only way to set it, which on the appliance meant
+  // editing the service file; this row is the live version. The value is
+  // persisted beside the shard, so it survives the power cut that is the
+  // appliance's off switch. Old memories keep the place they were taught at.
+  function drawLoc() {
+    const b = el('button', locWhere ? 'CHANGE' : 'SET LOCATION');
+    b.onclick = editLoc;
+    loc.replaceChildren(
+      el('span', locWhere ? 'here: ' + locWhere : 'location not set'), b);
+  }
+  function editLoc() {
+    const inp = document.createElement('input');
+    // same shape as the rename field, traps included: the global keydown
+    // listener already bails on INPUT targets, so typing here cannot fire
+    // robot commands
+    inp.className = 'edit'; inp.value = locWhere || ''; inp.maxLength = 40;
+    inp.placeholder = 'e.g. hotel room, booth 12';
+    inp.autocapitalize = 'none'; inp.spellcheck = false;
+    loc.replaceChildren(inp);
+    inp.focus(); inp.select();
+    let done = false;
+    // one guard for both exits, exactly as in renameBtn: Enter fires, then
+    // the blur it causes fires again
+    const finish = async save => {
+      if (done) return;
+      done = true;
+      const to = inp.value.trim();
+      if (save && to !== (locWhere || '')) {
+        // an empty value is a real request: it clears the location
+        await post('/where?to=' + encodeURIComponent(to));
+        openMem();  // redraw from the robot's answer, not our guess
+      } else {
+        drawLoc();
+      }
+    };
+    inp.onkeydown = e => {
+      if (e.key === 'Enter') finish(true);
+      if (e.key === 'Escape') finish(false);
+    };
+    inp.onblur = () => finish(true);
+  }
 
   function armedBtn(text, cls, action) {
     const b = el('button', text, cls);
@@ -821,40 +896,52 @@ def draw_feed(frame, tracks, focused):
     return frame
 
 
+def _when(ts):
+    """A spoken timestamp: today's sightings keep just the clock, older ones
+    name the day — recall is no longer capped at midnight, and "I saw it at
+    9:12 PM" is a lie by omission when that was Tuesday."""
+    t = time.localtime(ts)
+    if time.strftime("%Y%m%d", t) == time.strftime("%Y%m%d"):
+        return time.strftime("%-I:%M %p", t)
+    return time.strftime("%b %-d, %-I:%M %p", t)
+
+
 def _answer_line(q, res):
     """The spoken sentence — every value in it is a live payload field.
 
     Built separately from `_speak` because the panel shows it too: the Jetson
     has no audio hardware, so on the appliance this line is the whole answer.
     """
-    seen = res["seen"]
-    if not seen:
-        return "I didn't see anything like that today."
-    if "what did you see" in q.lower():
-        # the day-inventory question lists the objects; anything else answers
-        # with the top hit. ponytail: one phrase check, not intent parsing —
-        # the demo script asks this exact question
-        labels = [h.payload.get("label") or "something" for h in seen[:3]]
+    s = res["sightings"]
+    if res["inventory"]:
+        if not s:
+            return "I didn't see anything today."
+        labels = [h.payload.get("label") or "something" for h in s[:3]]
         names = (", ".join(labels[:-1]) + f" and {labels[-1]}"
                  if len(labels) > 1 else labels[0])
         return f"Today I saw {names}."
-    p = seen[0].payload
-    when = time.strftime("%-I:%M %p", time.localtime(p["ts"]))
-    line = f"I saw {p.get('label') or 'something'} at {when}"
+    if not res["label"]:
+        return "You haven't taught me anything yet."
+    if not s:
+        return f"I know {res['label']}, but I haven't seen it around."
+    p = s[0].payload
+    line = f"I saw {res['label']} at {_when(p['ts'])}"
     if p.get("where"):
         line += f", in {p['where']}"
+    if len(s) > 1:
+        line += ". Before that at " + " and ".join(
+            _when(h.payload["ts"]) for h in s[1:])
     return line + "."
 
 
 def _hit_json(hit):
-    """One recall result, flattened for the panel."""
+    """One sighting row, flattened for the panel. No score: these come from
+    a scroll ordered by time, not a vector search — see Robot.ask."""
     p = hit.payload
     return {
-        "when": time.strftime("%H:%M", time.localtime(p["ts"])),
+        "when": time.strftime("%b %-d, %H:%M", time.localtime(p["ts"])),
         "label": p.get("label"),
-        "what": p.get("transcript"),
         "where": p.get("where"),
-        "score": round(hit.score, 2),
         "thumb": Path(p["thumb"]).name if p.get("thumb") else None,
     }
 
@@ -1037,6 +1124,14 @@ class StreamHandler(BaseHTTPRequestHandler):
             elif self.path.startswith("/unignore"):
                 tid = self._int("tid", 0)  # track ids start at 1, so 0 misses
                 self._send_json({"tid": tid, "ok": self.app.unignore(tid)})
+            elif self.path.startswith("/where"):
+                # the device moved: change the place stamped on new memories.
+                # An empty (or absent) value clears it. Normalized and capped
+                # server-side like /rename, and for the same reason — the
+                # page's maxLength means nothing to a crafted POST, and recall
+                # reads this string out loud.
+                self._send_json({"where": self.app.set_where(
+                    self._query("to", ""))})
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -1150,13 +1245,19 @@ class LiveApp:
         The grouping scans every taught point per page, which is single digits
         of points at demo scale. If a shard ever holds hundreds of objects,
         page the scroll itself rather than slicing here.
+
+        No app lock, deliberately: Memory serializes its own shard access,
+        including a REBOOT's reopen, so the scan cannot race it. The app lock
+        is held by the detect thread for a whole YOLO pass, and behind it this
+        page cost 0.8-1.6 s (measured) for a half-millisecond scan — paid on
+        every open, delete and rename, since all of them redraw the tab.
         """
-        with self.lock:  # a REBOOT mid-scroll would read a closed shard
-            objects = self.robot.memory.objects()
+        objects = self.robot.memory.objects()
         return {
             "total": len(objects),
             "offset": offset,
             "points": self.mem_count,
+            "where": self.robot.memory.where,
             "objects": [{
                 "label": o["label"],
                 "seen": o["seen"],
@@ -1192,14 +1293,12 @@ class LiveApp:
     def ignored(self):
         """What IGNORE has dismissed this session, for the tab to undo.
 
-        Under the lock like every other reader of shared state: the key thread
-        adds to that dict on a Q press and /unignore removes from it, and
-        iterating it while either happens raises `dictionary changed size
-        during iteration` — which would land as a traceback on the HTTP thread,
-        not in the tab.
+        No lock: the ignore dict is copy-on-write (see Detector.__init__), so
+        this iterates a snapshot that cannot change under it. It used to take
+        the app lock against `dictionary changed size during iteration`, which
+        made the tab's second fetch wait out a YOLO pass too.
         """
-        with self.lock:
-            dismissed = self.robot.detector.ignored()
+        dismissed = self.robot.detector.ignored()
         return {"ignored": [{
             "tid": g["tid"],
             "when": time.strftime("%H:%M", time.localtime(g["ts"])),
@@ -1245,6 +1344,15 @@ class LiveApp:
         self.banner = "tracking that again" if ok else "that isn't ignored"
         return ok
 
+    def set_where(self, place):
+        """Update the robot's location, from the tab. Under the lock like the
+        other mutations — it is one write, but a teach mid-flight reads
+        `memory.where` and should see one value, not a torn decision."""
+        with self.lock:
+            where = self.robot.set_where(place)
+        self.banner = f'here: "{where}"' if where else "location cleared"
+        return where
+
     def _card_json(self):
         """The last action's result: taught, forgot, or an answer."""
         card = self.card
@@ -1260,8 +1368,7 @@ class LiveApp:
             return {"kind": "forgot", "label": label, "n": n}
         q, res = data
         return {"kind": "answer", "q": q, "say": _answer_line(q, res),
-                "seen": [_hit_json(h) for h in res["seen"][:3]],
-                "heard": [_hit_json(h) for h in res["heard"][:3]]}
+                "hits": [_hit_json(h) for h in res["sightings"][:3]]}
 
     def crop_jpeg(self):
         """The live crop of whatever holds focus — the "sees now" half of the
@@ -1360,7 +1467,7 @@ class LiveApp:
             # transcribe, so Whisper is certainly loaded; before the live-state
             # lock, so a first-of-session load can't freeze the detect thread
             # long enough to start killing tracks.
-            models.warm_encoders(kind)
+            models.warm_encoders()
             # Whisper takes seconds; run it before claiming the lock so the
             # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
@@ -1378,8 +1485,11 @@ class LiveApp:
                 self.card = ("taught", taught)
                 self.banner = f'taught: "{taught["label"]}"'
             else:
-                with self.lock:
-                    res = self.robot.ask(q)
+                # No app lock: ask reads only memory, which serializes its
+                # own shard access, and touches no track state. Holding the
+                # app lock here just queued the answer behind a YOLO pass —
+                # up to a second of wait on a path the operator is watching.
+                res = self.robot.ask(q)
                 print(f"asked: {q!r}")
                 self.card = ("answer", (q, res))
                 self.banner = None
@@ -1390,12 +1500,12 @@ class LiveApp:
             # before `busy` is cleared and wedge the robot
             self.busy = False
 
-    def _warm_quietly(self, kind):
+    def _warm_quietly(self):
         """warm_encoders for a background thread: a failed load (transient
         download, full disk) must be one log line, not a traceback storm —
         the action itself retries the load and reports its own failure."""
         try:
-            models.warm_encoders(kind)
+            models.warm_encoders()
         except Exception as e:
             print(f"encoder warm failed (the action will retry): {e}")
 
@@ -1412,8 +1522,7 @@ class LiveApp:
         # release behind "thinking...". Relocated, not removed. Safe for
         # tracking because the hold is ~3 s against DEAD_SECONDS = 5.0 —
         # tracks ride it out; that margin is the load-bearing part.
-        threading.Thread(target=self._warm_quietly, args=(kind,),
-                         daemon=True).start()
+        threading.Thread(target=self._warm_quietly, daemon=True).start()
         if kind == "t":
             f = self.robot.teachable
             self.pending_teach = self._teach_target(f)
@@ -1704,7 +1813,9 @@ def main():
     ap.add_argument("--location", default=None,
                     help='place stamped on memories this session, e.g. '
                          '"Hotel room", shown on recall so "where are my keys" '
-                         'points back to where it learned them')
+                         'points back to where it learned them. Overrides the '
+                         'value set from the memory tab (which persists in '
+                         'the data dir) for this run only')
     ap.add_argument("--reset", action="store_true",
                     help="wipe the shard dir before starting (clean slate "
                          "between takes; off the live UI so it can't be tapped)")

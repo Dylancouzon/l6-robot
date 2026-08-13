@@ -163,6 +163,13 @@ class Detector:
         # the memory tab can show and undo. A bare set of ids would be enough
         # to suppress them, but then a mis-tap is invisible and permanent for
         # the session, which is the same complaint FORGET had.
+        #
+        # Copy-on-write: mutators REPLACE the dict rather than editing it in
+        # place. Both mutators run under the app's live-state lock (Q on the
+        # key thread, /unignore on an HTTP thread), so writes never race each
+        # other — and a reader that grabs the reference iterates a snapshot
+        # that can no longer change. That is what lets /ignored answer without
+        # the app lock, which the detect thread holds for a whole YOLO pass.
         self._ignored = {}
 
     def warm(self):
@@ -178,7 +185,9 @@ class Detector:
 
         `thumb` is only there so the memory tab can show what was dismissed;
         nothing in the detector reads it."""
-        self._ignored[tid] = {"tid": tid, "thumb": thumb, "ts": time.time()}
+        ignored = dict(self._ignored)  # mutate the copy, then publish it
+        ignored[tid] = {"tid": tid, "thumb": thumb, "ts": time.time()}
+        self._ignored = ignored
         self.tracks.pop(tid, None)
 
     def unignore(self, tid):
@@ -186,7 +195,10 @@ class Detector:
         still holds that id, and otherwise the next time it is proposed under
         a new one — either way there is nothing to restore here, because an
         ignored track carries no memory state."""
-        return self._ignored.pop(tid, None) is not None
+        if tid not in self._ignored:
+            return False
+        self._ignored = {k: v for k, v in self._ignored.items() if k != tid}
+        return True
 
     def ignored(self):
         """What has been dismissed this session, newest first."""
@@ -195,7 +207,7 @@ class Detector:
 
     def reset(self):
         self.tracks.clear()
-        self._ignored.clear()
+        self._ignored = {}  # replaced, never mutated — see __init__
         predictor = getattr(self.model, "predictor", None)
         for tracker in getattr(predictor, "trackers", None) or []:
             tracker.reset()
