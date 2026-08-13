@@ -1735,11 +1735,16 @@ now attaches each label's recent sightings (`last_sightings`, limit 8 — the
 same burst-collapse recall uses, so eight rows are eight occasions), and the
 card's tap-cycle walks taught views first, then sightings. (Two details
 here lasted one day: the split caption became one combined count, and DROP
-works on sightings too now — see round 15's follow-ups.) Eight is a cap,
-not "all" — the operator
-asked for all the views, and all *distinct occasions* is what makes sense: a
-mug sitting in view logs hundreds of near-identical bursts. FORGET still
-deletes sightings with the object, unchanged.
+works on sightings too now — see round 15's follow-ups.) The list shows
+every *distinct occasion*, not every frame: a mug sitting in view logs
+hundreds of near-identical bursts, and the burst-collapse is what makes the
+rows mean anything. It shipped capped at the newest 8 occasions and the cap
+lasted two days — an object with more occasions than the cap made DROP look
+broken all over again (drop one of 40, the 9th slides in, the counter never
+moves; the operator caught it on hat). Uncapped now, and cheap: the whole
+live shard's five objects put 66 occasion rows in one /memories page, and
+pictures load only when shown. FORGET still deletes sightings with the
+object, unchanged.
 
 ### Verified
 

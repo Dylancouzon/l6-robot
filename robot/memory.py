@@ -394,14 +394,21 @@ class Memory:
                 # re-teach just wrote
                 g["label"] = g["views"][0].get("label") or g["label"]
                 g["seen"] = self.count_label(g["label"])
-                # the newest sightings too — the pictures the robot took on
-                # its own, which recall answers with. Until these were here,
+                # the sightings too — the pictures the robot took on its
+                # own, which recall answers with. Until these were here,
                 # "when did you last see dylan" showed photos the memory tab
                 # had no way to reach. Same burst-collapse as recall
-                # (last_sightings), so eight rows are eight occasions rather
-                # than one moment eight times over.
+                # (last_sightings), so each row is a distinct occasion — and
+                # UNCAPPED, deliberately: this list is what DROP works
+                # through, and a cap turns deletion invisible (drop one of
+                # 40 occasions behind a cap of 8 and the 9th slides in — the
+                # counter never moves, which reads as a delete that did
+                # nothing; that shipped, and the operator caught it in a
+                # day). The rows are dicts of payload + id; pictures load
+                # only when shown, so a long-lived object costs JSON bytes
+                # here, not image fetches.
                 g["sightings"] = [dict(r.payload, id=r.id) for r in
-                                  self.last_sightings(g["label"], limit=8)]
+                                  self.last_sightings(g["label"], limit=None)]
                 out.append(g)
             out.sort(key=lambda g: g["views"][0].get("ts") or 0, reverse=True)
             return out
@@ -532,7 +539,7 @@ class Memory:
                         - (r.payload.get("ts") or 0)) < apart:
                 continue
             out.append(r)
-            if len(out) >= limit:
+            if limit is not None and len(out) >= limit:
                 break
         return out
 
