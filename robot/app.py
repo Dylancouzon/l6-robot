@@ -631,26 +631,36 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     const card = el('div', null, 'obj');
     const pic = el('img'), said = el('div', null, 'said');
     const cap = el('div', null, 'meta');
+    // One tap-cycle over everything the robot holds for this object: the
+    // taught views first, then its own recent photos (sightings, newest
+    // first, the same pictures recall answers with -- they used to be
+    // reachable only by asking "where did I leave it").
+    const sights = o.sightings || [];
+    const entries = o.views.concat(sights);
     let i = 0;
     const drop = armedBtn('DROP THIS VIEW', 'drop', () =>
-      post('/forget_view?id=' + o.views[i].id +
+      post('/forget_view?id=' + entries[i].id +
            '&label=' + encodeURIComponent(o.label)));
     const show = () => {
-      const v = o.views[i];
+      const v = entries[i], taught = i < o.views.length;
       pic.src = '/thumb?f=' + encodeURIComponent(v.scene || v.thumb || '');
       said.textContent = v.transcript ? '\\u201c' + v.transcript + '\\u201d' : '';
-      cap.textContent = 'view ' + (i + 1) + ' of ' + o.views.length +
-                        ' \\u00b7 ' + v.when + (v.where ? ' \\u00b7 ' + v.where : '');
+      cap.textContent = (taught
+          ? 'view ' + (i + 1) + ' of ' + o.views.length
+          : 'seen ' + (i - o.views.length + 1) + ' of ' + sights.length)
+        + ' \\u00b7 ' + v.when + (v.where ? ' \\u00b7 ' + v.where : '');
+      // DROP acts on taught views only: a sighting is history, and the
+      // server would refuse its id anyway (forget_view checks taught_ids)
+      drop.style.display = taught ? '' : 'none';
     };
-    // Tap the picture to walk this object's taught views. Re-teaching adds
-    // one rather than replacing it -- that is what makes recognition work from
-    // more than one angle -- and this is the only way to see whether the
-    // second one was any good. DROP THIS VIEW acts on whichever one is showing.
-    // disarm on the way: DROP acts on whichever view is showing, so an armed
-    // button plus a tap on the picture would delete a different one than the
-    // one that was armed
+    // Tap the picture to walk the cycle. Re-teaching adds a view rather than
+    // replacing it -- that is what makes recognition work from more than one
+    // angle -- and this is the only way to see whether the second one was any
+    // good. DROP THIS VIEW acts on whichever taught view is showing.
+    // disarm on the way: an armed button plus a tap on the picture would
+    // delete a different view than the one that was armed
     pic.onclick = () => {
-      i = (i + 1) % o.views.length; show(); drop.disarm();
+      i = (i + 1) % entries.length; show(); drop.disarm();
     };
     show();
     const name = el('div', o.label, 'name');
@@ -789,8 +799,7 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     try { r = await (await fetch('/ignored')).json(); } catch (e) { return; }
     if (gen !== memGen) return;   // same staleness guard as loadPage
     if (!r.ignored.length) return;
-    igns.append(el('h2', 'IGNORED \\u00b7 ' + r.ignored.length +
-                        ' this session (nothing was stored)'));
+    igns.append(el('h2', 'IGNORED \\u00b7 ' + r.ignored.length));
     for (const g of r.ignored) {
       const card = el('div', null, 'obj');
       const pic = el('img');
@@ -798,11 +807,12 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
       const b = el('button', 'TRACK AGAIN', 'un');
       b.onclick = async () => {
         b.disabled = true;
-        try { await fetch('/unignore?tid=' + g.tid, { method: 'POST' }); } catch (e) {}
+        // pid stays the string the server sent -- point ids exceed 2^53
+        try { await fetch('/unignore?pid=' + g.pid, { method: 'POST' }); } catch (e) {}
         loadIgnored();
       };
       const foot = el('div', null, 'foot');
-      foot.append(el('div', 'ignored at ' + g.when, 'meta'), b);
+      foot.append(el('div', 'ignored ' + g.when, 'meta'), b);
       const body = el('div', null, 'body');
       body.append(foot);
       card.append(pic, body);
@@ -1122,8 +1132,11 @@ class StreamHandler(BaseHTTPRequestHandler):
                      "n": self.app.rename(label, to)}
                     if label and to else {"n": 0}, 200 if label and to else 400)
             elif self.path.startswith("/unignore"):
-                tid = self._int("tid", 0)  # track ids start at 1, so 0 misses
-                self._send_json({"tid": tid, "ok": self.app.unignore(tid)})
+                # the pid travels as a string (point ids exceed 2^53, see
+                # _view_json); 0 on a malformed request misses harmlessly
+                pid = self._int("pid", 0)
+                self._send_json({"pid": str(pid),
+                                 "ok": self.app.unignore(pid)})
             elif self.path.startswith("/where"):
                 # the device moved: change the place stamped on new memories.
                 # An empty (or absent) value clears it. Normalized and capped
@@ -1262,6 +1275,12 @@ class LiveApp:
                 "label": o["label"],
                 "seen": o["seen"],
                 "views": [self._view_json(v) for v in o["views"]],
+                # the robot's own recent photos of it, same shape as a view
+                # (a sighting has no transcript; its picture is the thumb).
+                # The card's tap-cycle walks these after the taught views —
+                # they are the pictures recall answers with, and until they
+                # were here the tab had no way to show them.
+                "sightings": [self._view_json(v) for v in o["sightings"]],
             } for o in objects[offset:offset + limit]],
         }
 
@@ -1291,19 +1310,23 @@ class LiveApp:
         }
 
     def ignored(self):
-        """What IGNORE has dismissed this session, for the tab to undo.
+        """Everything IGNORE has dismissed, for the tab to list and undo.
 
-        No lock: the ignore dict is copy-on-write (see Detector.__init__), so
-        this iterates a snapshot that cannot change under it. It used to take
-        the app lock against `dictionary changed size during iteration`, which
-        made the tab's second fetch wait out a YOLO pass too.
+        Read from the shard now (kind="ignored" points), not the detector's
+        session dict — dismissals persist across restarts, so the list must
+        too. No app lock, for the same reason as `memories`: Memory
+        serializes its own shard access, and behind the app lock this read
+        queued up to 1.6 s behind a YOLO pass. The pid is a string for the
+        same reason every point id this page sees is (see _view_json).
         """
-        dismissed = self.robot.detector.ignored()
+        rows = self.robot.memory.ignored()
         return {"ignored": [{
-            "tid": g["tid"],
-            "when": time.strftime("%H:%M", time.localtime(g["ts"])),
-            "thumb": Path(g["thumb"]).name if g.get("thumb") else None,
-        } for g in dismissed]}
+            "pid": str(r.id),
+            "when": time.strftime("%b %-d, %H:%M",
+                                  time.localtime(r.payload.get("ts") or 0)),
+            "thumb": (Path(r.payload["thumb"]).name
+                      if r.payload.get("thumb") else None),
+        } for r in rows]}
 
     def forget_label(self, label):
         """Delete one object by name — from the tab, or from the F key."""
@@ -1338,9 +1361,9 @@ class LiveApp:
             self.banner = "that view is already gone"
         return {"n": n, "whole": whole, "label": label}
 
-    def unignore(self, tid):
+    def unignore(self, pid):
         with self.lock:
-            ok = self.robot.unignore(tid)
+            ok = self.robot.unignore(pid)
         self.banner = "tracking that again" if ok else "that isn't ignored"
         return ok
 

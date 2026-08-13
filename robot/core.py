@@ -141,21 +141,35 @@ class Robot:
         """
         now = now or time.time()
         tracks = self.detector.process(frame, now)
+        live = []
         for t in tracks:
-            if not t.due_for_query(now):
-                continue
-            t.vec = models.embed_crop(t.crop)
-            hit, score = self.memory.recognize(t.vec)
-            t.score = score
-            t.label = hit.payload["label"] if hit else None
-            t.note = hit.payload["transcript"] if hit else None
-            t.thumb = hit.payload.get("thumb") if hit else None
-            t.last_query = now
-            t.crop_q = 0.0  # collect a fresh best crop for the next query
+            if t.due_for_query(now):
+                t.vec = models.embed_crop(t.crop)
+                hit, score = self.memory.recognize(t.vec)
+                t.score = score
+                t.label = hit.payload["label"] if hit else None
+                t.note = hit.payload["transcript"] if hit else None
+                t.thumb = hit.payload.get("thumb") if hit else None
+                t.last_query = now
+                t.crop_q = 0.0  # collect a fresh best crop for the next query
+                if hit is None:
+                    # An unknown that looks like something the operator
+                    # dismissed is dismissed again, silently — this is what
+                    # makes IGNORE survive a restart (and a REBOOT), since the
+                    # tid blocks in the detector die with the run. Checked
+                    # only when no taught view matched: a taught label always
+                    # beats an ignore, so a degenerate ignored crop can hide
+                    # unknown clutter at worst, never a taught object. Undo is
+                    # TRACK AGAIN in the memory tab, same as ever.
+                    ig = self.memory.match_ignored(t.vec)
+                    if ig is not None:
+                        self.detector.ignore(t.tid, pid=ig.id)
+                        continue  # not displayed, not teachable
+            live.append(t)
 
-        knowns = self._one_per_label([t for t in tracks if t.label])
+        knowns = self._one_per_label([t for t in live if t.label])
         primary = self.focused(
-            [t for t in tracks if not t.label and t.last_query], pool="unknown")
+            [t for t in live if not t.label and t.last_query], pool="unknown")
         display = knowns + ([primary] if primary else [])
         # Decided here, on the one thread that owns track state. The teach
         # target is the salient unknown, never a known — otherwise a
@@ -369,17 +383,33 @@ class Robot:
 
     def ignore(self, track, frame=None):
         """Dismiss an unknown so the robot stops offering it — clutter you
-        don't want to teach. Sticky per track, so it stays dismissed.
+        don't want to teach. Persistent now: the dismissal writes the crop's
+        vector to the shard (kind="ignored"), so the same-looking object is
+        re-suppressed after a restart, when track ids mean nothing. It used
+        to live only as a track id in the detector, and every power cut
+        brought all the clutter back — reported as "ignored items get
+        deleted each session".
 
         Takes the track rather than its id so a picture of what was dismissed
         can go with it: the memory tab lists these, and "IGNORED x3" with no
         pictures is not something an operator can undo with any confidence.
         """
-        self.detector.ignore(track.tid, thumb=self._scene(frame, track.box))
+        # The teach target has always been embedded (it is only offered after
+        # its first query), so this fallback embed never runs in practice —
+        # it is here so a caller with a never-queried track cannot write a
+        # vectorless point.
+        vec = track.vec if track.vec is not None else models.embed_crop(track.crop)
+        pid = self.memory.ignore(vec, thumb=self._scene(frame, track.box))
+        self.detector.ignore(track.tid, pid=pid)
+        self.log("ignored one unknown")
 
-    def unignore(self, tid):
-        """Take one object off the ignore list, from the memory tab."""
-        return self.detector.unignore(tid)
+    def unignore(self, pid):
+        """Take one dismissal back, from the memory tab: delete its point and
+        lift any live blocks that came from it."""
+        ok = self.memory.unignore(pid)
+        if ok:
+            self.detector.unblock(pid)
+        return ok
 
     # -- ask -------------------------------------------------------------------
 

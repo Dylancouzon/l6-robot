@@ -241,6 +241,73 @@ class Memory:
             },
         )
 
+    def ignore(self, image_vec, thumb=None, ts=None):
+        """Persist one dismissal: the ignored crop's vector, image only.
+
+        This is what makes IGNORE survive a restart. A dismissal used to live
+        as a track id in the detector, and track ids restart from 1 every run,
+        so there was nothing to reload — every power cut brought all the
+        clutter back. The vector is the only durable name the object has:
+        after a restart the same-looking thing is re-suppressed the first time
+        it is embedded (see Robot.process_frame), exactly the way recognition
+        re-finds a taught object.
+        """
+        return self._upsert(
+            {"image": image_vec},
+            {
+                "kind": "ignored",
+                "ts": ts or time.time(),
+                "thumb": thumb,
+                "where": self.where,
+            },
+        )
+
+    def unignore(self, pid):
+        """Delete one ignored point. Verified against the shard first, like
+        forget_view: the id arrives from a page that may be stale, and a pid
+        belonging to something else (a sighting, a taught view) must not be
+        deletable through this door."""
+        with self._lock:
+            if pid not in [r.id for r in self.ignored()]:
+                return False
+            self.shard.update(UpdateOperation.delete_points([pid]))
+            self.shard.flush()
+            return True
+
+    def ignored(self):
+        """Every persisted dismissal, newest first — the tab's IGNORED list."""
+        from qdrant_edge import ScrollRequest
+        with self._lock:
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="ignored")),
+                ])))
+        records.sort(key=lambda r: r.payload.get("ts") or 0, reverse=True)
+        return records
+
+    def match_ignored(self, image_vec):
+        """Nearest ignored crop vs the same threshold recognition uses.
+        Returns the hit or None. Only consulted for tracks that did NOT match
+        a taught object (see Robot.process_frame): a taught label always
+        beats an ignore, so a degenerate ignored crop — the blank/reflective
+        kind that matches broadly — can at worst hide unknown clutter, never
+        something that was deliberately taught."""
+        with self._lock:
+            hits = self.shard.query(QueryRequest(
+                query=Query.Nearest(image_vec, using="image"),
+                filter=Filter(must=[
+                    FieldCondition(key="kind",
+                                   match=MatchValue(value="ignored")),
+                ]),
+                limit=1,
+                with_payload=True,
+            ))
+        if hits and hits[0].score >= self.threshold:
+            return hits[0]
+        return None
+
     # -- reads ----------------------------------------------------------------
 
     def count_label(self, label, kind="seen"):
@@ -294,6 +361,14 @@ class Memory:
                 # re-teach just wrote
                 g["label"] = g["views"][0].get("label") or g["label"]
                 g["seen"] = self.count_label(g["label"])
+                # the newest sightings too — the pictures the robot took on
+                # its own, which recall answers with. Until these were here,
+                # "when did you last see dylan" showed photos the memory tab
+                # had no way to reach. Same burst-collapse as recall
+                # (last_sightings), so eight rows are eight occasions rather
+                # than one moment eight times over.
+                g["sightings"] = [dict(r.payload, id=r.id) for r in
+                                  self.last_sightings(g["label"], limit=8)]
                 out.append(g)
             out.sort(key=lambda g: g["views"][0].get("ts") or 0, reverse=True)
             return out

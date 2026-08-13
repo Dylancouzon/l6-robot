@@ -58,6 +58,13 @@ The thirteen rounds, newest last — each heading below carries the full story:
     measured noise. Recall now picks the object in the text space and
     answers with its last three sightings by time; the SEEN/HEARD split and
     CLIP's text tower are gone. See "Recall answered from the wrong space".
+14. **Three phone reports** — the mic permission prompt on every use (browser
+    behaviour, README fix, no code change), ignores dying with the session
+    (they persist as vectors in the shard now and re-suppress by appearance),
+    and the memory tab not showing the robot's own photos (the card's
+    tap-cycle now walks taught views, then recent sightings). See "The
+    prompt, the clutter that came back, and the photos the tab couldn't
+    show".
 
 ## Goal and constraints
 
@@ -78,18 +85,18 @@ The thirteen rounds, newest last — each heading below carries the full story:
 ## Repository state
 
 - Repository: `/home/qdrant/Documents/github/l6-robot`
-- PRs #1–#9 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
+- PRs #1–#10 (Jetson CUDA, threshold calibration, UI responsiveness + certs,
   headless appliance, streaming + voice, HTML panel, track lifetime + focus,
-  memory tab + people as objects) are all **merged** into `main` as of
-  2026-08-12. Their rationale lives in the sections below — including #8's
-  **refusal** of a threshold move to 0.88 on measurement, which is the part
-  to read before anyone tries it again.
-- Branch: `codex/recall-and-location` (PR #10),
-  off `main`: rounds 12–13 and their follow-ups — "The slowdown, the lock,
-  and the location button" and "Recall answered from the wrong space"
-  below. No new dependencies; one deletion of consequence (CLIP's text
-  tower) and one new file beside the shard (`where.txt`), both additive to
-  existing shards.
+  memory tab + people as objects, recall from the text space + SET LOCATION)
+  are all **merged** into `main` as of 2026-08-13. Their rationale lives in
+  the sections below — including #8's **refusal** of a threshold move to
+  0.88 on measurement, which is the part to read before anyone tries it
+  again.
+- Branch: `codex/persistent-ignore-and-sightings` (PR #11), off `main`:
+  round 14 — "The prompt, the clutter that came back, and the photos the
+  tab couldn't show" below. No new dependencies; one new payload kind
+  (`ignored`), additive to existing shards. Deployed and serving on the
+  unit since 2026-08-13.
 - Branch: `codex/remote-access-doc`, one commit ahead of `main`: `REMOTE-ACCESS.md`
   and two pointers to it, no code. Documentation only — how to get a shell on the
   headless unit over any of three independent routes, and how to move it between
@@ -1119,7 +1126,8 @@ payload.
   delete button's idea of one object. Newest first, with `count_label` giving
   the sighting count per label (5 labels = 6 ms, measured).
 - Four endpoints: `GET /memories?offset&limit`, `GET /ignored`,
-  `POST /forget?label=`, `POST /unignore?tid=`. (Six now — `POST /rename` and
+  `POST /forget?label=`, `POST /unignore?tid=` (now `?pid=`, a point id —
+  round 14 made dismissals shard points). (Six now — `POST /rename` and
   `POST /forget_view` arrived in the next round, below.) The two mutations run
   synchronously in the HTTP handler under `self.lock` — an HTTP handler thread
   is already off the frame pump, which was the whole reason for the key
@@ -1188,12 +1196,12 @@ one wrong guess would have cost.
 
 ### Worth knowing
 
-- **A Q press writes a thumbnail nothing will ever reference again.**
-  `Detector._ignored` is session-only, so after a restart the scene JPEG
-  written for each ignored object is an orphan in `edge-data/thumbs`. Left
-  alone: it matches the existing policy that forgetting deletes points and not
-  files, and it is 5–15 KB per press on an NVMe. Noted so nobody re-discovers
-  it as a leak.
+- ~~**A Q press writes a thumbnail nothing will ever reference again.**~~
+  Overtaken in round 14: a dismissal is a shard point now, and the point
+  references its thumbnail. What remains true is that TRACK AGAIN deletes
+  the point and not the JPEG (the same policy as forget), so an *undone*
+  ignore orphans its picture — 5–15 KB on an NVMe, still not a leak worth
+  machinery.
 - **The scene picture contains whatever was in frame, including people.** And
   since the round below, a person can be the *subject* rather than the
   background. Every scene captured during this work has the operator in
@@ -1620,12 +1628,11 @@ Four operator reports after driving the new recall from the phone:
   triggered it (.edit is 17px); the location field's 14px override did.
   It is 16px now, and the comment above it says why: **any input added to
   this page needs ≥16px font**, or it inherits the bug.
-- **"Why are ignored items deleted?" — they aren't.** `Detector._ignored`
-  is session-only by design (nothing is stored for an ignored object, which
-  is what makes IGNORE free to undo), and the service was restarted twice
-  that evening to ship these rounds — each restart empties the list. Not a
-  regression; recorded so the next person doesn't hunt for a delete that
-  doesn't exist.
+- ~~**"Why are ignored items deleted?" — they aren't.**~~ The answer given
+  here (session-only by design, nothing stored) was accurate and did not
+  survive contact with the operator, who reported it again the next day as
+  a bug. Round 14 makes dismissals persistent — see "The prompt, the
+  clutter that came back, and the photos the tab couldn't show".
 - And one more lock the measurement said to drop: **`ask` no longer takes
   the app lock** in `_process` — it reads only memory (which serializes
   itself) and touches no track state, so the app lock bought nothing but up
@@ -1658,6 +1665,91 @@ Four operator reports after driving the new recall from the phone:
   code. Each is a real cost the smallest-change rule keeps choosing to pay;
   fix them when one of them actually fires, and update this list when you
   do.
+
+## The prompt, the clutter that came back, and the photos the tab couldn't show
+
+Three phone reports (2026-08-13, fourteenth round): the mic permission prompt
+on every use, "ignored items get deleted each session", and the memory tab
+showing only manually taught views — *"When did you last see Dylan" shows
+different views than the Memory tab. The memory tab should show all the
+views.* One was documentation, two were code.
+
+### The mic prompt is the browser's, and no code path causes it
+
+Read before changing anything: the page requests the microphone **once per
+page load** (`mic()` memoizes the promise; see "The voice path") and keeps
+it. The per-use prompt is two browser behaviours multiplying: the default
+per-site mic permission is *Ask*, which re-prompts on every fresh page load,
+and a phone reloads this page constantly because backgrounding the tab or
+locking the screen evicts it. The fix is a one-time phone setting, now in the
+README ("Stopping The 'Allow Microphone?' Prompt"): iOS Safari **aA →
+Website Settings → Microphone → Allow**; Android Chrome remembers the grant
+on its own **only once the certificate is trusted** — Chrome refuses to
+persist permissions for an origin whose certificate it distrusts, so an
+uninstalled cert is what makes its prompt come back. Do not add machinery
+for this; there is no web API that persists a permission.
+
+### Ignores persist as vectors now — the tid was never storable
+
+The old design stored a track id, and ids restart from 1 every run, so there
+was *nothing to persist*: a saved tid would block whatever unrelated track
+inherits the number next boot — the exact tid-reuse trap "UI responsiveness"
+documents. The durable name an ignored object has is what it looks like. So
+`Q` now writes a `kind="ignored"` point (image vector + scene thumb,
+`Memory.ignore`), and `process_frame` re-suppresses by appearance: an
+unknown whose requery matched **no taught view** is checked against ignored
+points (`Memory.match_ignored`, same 0.90 bar) and silently re-dismissed on
+a hit — tid-blocked via `Detector.ignore(tid, pid=...)`, not displayed, not
+teachable. The detector's `_ignored` dict is demoted to a per-frame gate;
+each block carries the pid it came from so `unignore(pid)` (which deletes
+the point after verifying the pid *is* an ignored point — the `forget_view`
+lesson) can lift its live blocks too via `Detector.unblock`.
+
+Order matters and is load-bearing: **taught always beats ignored**, because
+the ignore check runs only when recognition returned nothing. A degenerate
+ignored crop — the blank/reflective kind that matches everything (0.951
+between two gray crops, see "Measured baselines") — can therefore at worst
+hide unknown *clutter*, never a taught object. That residual failure mode is
+real and accepted: if an ignore ever swallows an unknown someone wanted, it
+is visible in the tab's IGNORED list with its picture, and TRACK AGAIN
+undoes it. The tab lists from the shard now (`/ignored` reads `Memory`, no
+app lock, same reasoning as round 12), and `/unignore` takes `pid=` — **as a
+string in JSON**, the same 2^53 trap every point id on this page has.
+Side effects worth knowing: dismissals now survive REBOOT too (the shard
+reloads, the next requery re-suppresses), and a restart no longer empties
+the IGNORED list — the round-13 note explaining that emptying is struck
+through above.
+
+### The tab's card now shows the robot's own photos
+
+Sightings were only reachable through recall's answer card. `Memory.objects`
+now attaches each label's recent sightings (`last_sightings`, limit 8 — the
+same burst-collapse recall uses, so eight rows are eight occasions), and the
+card's tap-cycle walks taught views first, then sightings, captioned
+`view 1 of 2` vs `seen 1 of 8`. DROP THIS VIEW hides itself while a sighting
+shows (`display:none` toggled in `show()`): sightings are history, not
+taught memories, and the server would refuse the id anyway since
+`forget_view` checks `taught_ids`. Eight is a cap, not "all" — the operator
+asked for all the views, and all *distinct occasions* is what makes sense: a
+mug sitting in view logs hundreds of near-identical bursts. FORGET still
+deletes sightings with the object, unchanged.
+
+### Verified
+
+`bench/test_ignore.py` (session scratchpad) against a scratch shard — 20
+checks through the real `Memory` and the real `process_frame` (stub
+detector wearing the real `ignore`/`unblock` methods, stubbed embeds):
+persistence across reopen, re-suppression of a matching unknown, a stranger
+still offered, taught-beats-ignored with a trap point at the taught vector,
+unignore lifting live blocks, pid-door refusing a taught pid, and the
+sightings grouping/burst-collapse. `bench/stub_probe.py` drove the real
+page in headless firefox against a stub server (never the live service):
+the 5-step tap-cycle with correct captions, DROP visible on taught views
+only, no transcript on sightings, cycle wrap-around, and TRACK AGAIN
+posting the >2^53 pid as the exact string. Headless replay over `testdata/`
+is byte-identical before/after, and `verify_scores.py` parity is unchanged
+(same-object min 0.887 / med 0.920, different med 0.472 / max 0.611,
+margin +0.275).
 
 ## Measured baselines on this board
 
