@@ -1108,16 +1108,15 @@ payload.
   is already off the frame pump, which was the whole reason for the key
   thread, so routing them through the key queue would have bought nothing and
   cost the tab an honest answer to redraw from.
-- **A "scene" picture per taught view**: the whole frame, boxed and shrunk to
-  640 px at JPEG quality 80 (43 KB, against 89 KB at cv2's default 95).
-  **Superseded the same evening** — it is a crop of the object plus a margin
-  now, see "Two follow-ups" below; the sizing note stands, the framing does
-  not. The
-  crop is what CLIP compares and it is a poor thing to identify an object by —
-  masked, gray-filled, often a fragment. Payload key `scene`; points written
-  before it exist simply fall back to the crop, which is why an old memory
-  looks gray beside a new one and why **nothing had to be deleted**, despite
-  the operator offering.
+- **A "scene" picture per taught view** (payload key `scene`), because the
+  crop CLIP compares is a poor thing to identify an object by — masked,
+  gray-filled, often a fragment. Its framing changed once the same evening,
+  from the whole frame to the object plus a margin; see "Two follow-ups"
+  below for what it is now. JPEG quality 80 throughout, which was worth
+  measuring: 43 KB against 89 KB at cv2's default 95, for a picture nothing
+  scores against. Points written before it exists fall back to the crop, which
+  is why an old memory looks gray beside a new one and why **nothing had to be
+  deleted**, despite the operator offering.
 - `Detector._ignored` went from a set of tids to `tid -> {tid, thumb, ts}`,
   so the tab can list what IGNORE dismissed and undo it. Nothing is stored for
   an ignored object, so un-ignoring is just removing the block.
@@ -1152,30 +1151,23 @@ payload.
   live shard. If a shard ever holds hundreds of objects, page the scroll
   itself rather than slicing the grouped list.
 
-### Verified live, on this box
+### How this was tested, and how to test it again
 
-Service stopped, the app run against a **copy** of the live shard (the rule
-under "Operational notes"), and driven over HTTP:
+Every endpoint and both mutations were driven over HTTP with the service
+stopped and the app pointed at a **copy** of the live shard (the rule under
+"Operational notes"). A real teach goes through without a mic: `GET /listen?k=t`
+then `POST /audio?k=t` with a WAV file.
 
-- A real teach through the phone path — `GET /listen?k=t` then
-  `POST /audio?k=t` with a WAV — writes both pictures: `..._taught.jpg`
-  (crop) and `..._scene.jpg` (640x360, 47 KB, teal box on the object).
-  Whisper, the embeds and the shard write are untouched by any of this.
-- `/memories` pages without repeats or gaps; `/forget?label=water%20bottle`
-  returns the count, strips the label off the live track (panel score dropped
-  to 0.753, label null) and the object leaves the list; `/ignored` shows the
-  scene of what `Q` dismissed and `/unignore` returns it.
-- The page itself was driven in headless Firefox, not just eyeballed: paging
-  fires on scroll and stops when exhausted, tapping a picture walks
-  `view 1 of 2` → `2 of 2` → back with a different `src` each time, and one
-  tap of FORGET only arms it (4 objects still present; the armed text was
-  `TAP AGAIN` at the time and is `SURE?` since the buttons had to share a row)
-  and
-  disarms itself after 4 s. Harness: `shot_proxy.py` in the session
-  scratchpad — it serves the real `PAGE` with the tab opened and a probe
-  appended, and proxies everything else to the app. Throwaway, not in the repo.
-- Service restarted on the real shard afterwards: page 200 over
-  `https://10.42.0.1:8765`, five objects listed with their sighting counts.
+The page itself needs a browser, and this is the part worth rebuilding rather
+than re-deriving. The harness was a small proxy that serves the real `PAGE`
+with the memory tab already opened and a probe script appended, and forwards
+everything else to the app; headless Firefox `--screenshot` renders it, and
+the probe POSTs its measurements back to the proxy, because there is no other
+way to get numbers out. Two traps in it: firefox screenshots on the `load`
+event, so hold that open with a slow-loading image or you photograph a
+half-laid-out page; and the probe must be driven against a **stub server on a
+scratch shard**, never the live service — see the keydown bug below for what
+one wrong guess would have cost.
 
 ### Worth knowing
 
@@ -1296,22 +1288,13 @@ because `startswith` matches both.
 
 ### Verified
 
-Endpoints against a copy of the live shard: rename normalizes
-`"  My Magic Mouse  "` to `my magic mouse` across 212 points, keeps every
-transcript and thumb, and the sighting count follows the label; renaming onto
-an existing name merges 2 views + 1 into 3; dropping one view takes 2 to 1 and
-one point, leaving sightings alone; dropping a last view removes the object and
-its 85 sightings and says so. Five malformed requests all 400.
-
-In the page itself (headless Firefox, real `PAGE`): DROP arms on the first tap
-and drops on the second (`view 1 of 2 · 18:28` → `view 1 of 1 · 18:27`),
-single-view cards show only RENAME and FORGET, the rename field appears
-pre-filled and focused, Enter commits and Escape cancels.
-
-Replay over `testdata/` prints the same verdicts, and `verify_scores.py` is
-byte-identical to the documented baseline — same-object min 0.887 / med 0.920,
-different med 0.472 / max 0.611, margin +0.275. Service restarted on the real
-shard: 2.48 GB / 19 threads.
+Rename and both delete paths were exercised against a copy of the live shard,
+including the cases that only a second tab produces (an id already dropped, an
+id belonging to another object) and five malformed requests. Replay over
+`testdata/` prints the same verdicts and `verify_scores.py` is byte-identical
+to the baseline under "Measured baselines" — **that parity is the check to
+re-run after anything in this area**, since nothing here should be able to
+move it.
 
 ### Two follow-ups from watching the operator use it
 
