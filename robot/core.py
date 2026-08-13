@@ -47,6 +47,20 @@ def day_start_ts():
 # resumes focus when it comes back.
 FOCUS_MARGIN = 1.6
 
+# The "scene" picture kept beside every taught crop: the object as the camera
+# saw it, with a little room around it. The recognition crop is a poor way for
+# a human to identify their own object in a list — it is masked, gray-filled
+# and often a fragment — but so is a whole frame, where the object is a detail
+# somewhere in a room. This is the middle: the detector's box plus a margin, so
+# the object fills the picture and the margin says where it was.
+#
+# The margin is wider than the recognition crop's PAD (0.12) on purpose. That
+# one is tuned for what CLIP should see; this one is tuned for what a person
+# needs to recognize a thing at thumbnail size, and a little real background
+# helps. Nothing scores against this picture.
+SCENE_PAD = 0.3
+SCENE_PX = 480   # longest side; a phone card shows it about 170 px wide
+
 
 class Robot:
     def __init__(self, data_dir="edge-data", weights="yoloe-11l-seg-pf.pt",
@@ -70,19 +84,60 @@ class Robot:
         self.events.append(f"{time.strftime('%H:%M:%S')}  {msg}")
         del self.events[:-8]
 
-    def _thumb(self, crop, tag):
+    def _thumb(self, crop, tag, quality=None):
         path = self.thumbs / f"{time.time_ns()}_{tag}.jpg"
-        cv2.imwrite(str(path), crop)
+        opts = [] if quality is None else [cv2.IMWRITE_JPEG_QUALITY, quality]
+        cv2.imwrite(str(path), crop, opts)
         return str(path)
+
+    def _scene(self, frame, box):
+        """Save what the box was around, plus a margin — the memory tab's picture.
+
+        Unmasked and uncropped by the segmentation polygon, unlike the crop
+        that gets embedded: this one exists to be looked at, so the real
+        background inside the margin is the point rather than noise.
+
+        The frame is the one on screen when the button went down, but the box
+        is from the last completed detect pass — up to about half a second
+        older, since a pass measures 0.1-0.6 s. On a moving object the crop can
+        therefore trail it, and the embedded crop beside it is older still
+        (a track keeps the sharpest crop since its last query). So this is not
+        a picture of exactly what was learned. Context, not evidence.
+
+        No box drawn on it: the picture IS the box now. Falls back to the whole
+        frame when there is no box to crop to.
+        """
+        if frame is None or not frame.size:
+            return None
+        h, w = frame.shape[:2]
+        img = frame
+        if box is not None:
+            x1, y1, x2, y2 = box
+            px, py = (x2 - x1) * SCENE_PAD, (y2 - y1) * SCENE_PAD
+            x1, y1 = max(0, int(x1 - px)), max(0, int(y1 - py))
+            x2, y2 = min(w, int(x2 + px)), min(h, int(y2 + py))
+            region = frame[y1:y2, x1:x2]
+            if region.size:
+                img = region
+        h, w = img.shape[:2]
+        scale = SCENE_PX / max(h, w)
+        if scale < 1:
+            img = cv2.resize(img, (max(1, int(w * scale)),
+                                   max(1, int(h * scale))),
+                             interpolation=cv2.INTER_AREA)
+        # quality 80, unlike the embedded crops: a page of these is fetched
+        # over the robot's own hotspot, and nothing scores against them.
+        return self._thumb(img, "scene", quality=80)
 
     # -- the loop --------------------------------------------------------------
 
     def process_frame(self, frame, now=None):
         """Detect, embed and match due tracks, pick what the robot attends to.
 
-        Every recognized object stays in view and is logged as a sighting;
-        only ONE unknown at a time — the most prominent — is shown and
-        teachable. Other unknowns are ignored: they're clutter, not candidates.
+        Every recognized object stays in view and is logged as a sighting —
+        but only ONE box per remembered object (see `_one_per_label`). Only
+        ONE unknown at a time — the most prominent — is shown and teachable.
+        Other unknowns are ignored: they're clutter, not candidates.
         """
         now = now or time.time()
         tracks = self.detector.process(frame, now)
@@ -98,7 +153,7 @@ class Robot:
             t.last_query = now
             t.crop_q = 0.0  # collect a fresh best crop for the next query
 
-        knowns = [t for t in tracks if t.label]
+        knowns = self._one_per_label([t for t in tracks if t.label])
         primary = self.focused(
             [t for t in tracks if not t.label and t.last_query], pool="unknown")
         display = knowns + ([primary] if primary else [])
@@ -119,6 +174,60 @@ class Robot:
                 t.sighted = True
                 self.log(f"seen: {t.label} ({t.score:.2f})")
         return display
+
+    def _one_per_label(self, tracks):
+        """At most one box per remembered object, keeping the best match.
+
+        Teaching an object two or three times is the recommended habit — it is
+        the single biggest recognition win — but every taught view is a memory
+        the detector's other boxes can match too. Teach yourself twice and the
+        person box, the face box and the torso box all come back "dylan", so
+        the same memory is drawn three times over one human. One memory, one
+        box.
+
+        Best = highest recognition score, then salience — **except that the
+        track currently holding attention keeps its box.** That exception is
+        load-bearing, and it is not tidiness: dropping a track out of `display`
+        takes it out of `focused`'s candidate list, and `focused` can only
+        retain an incumbent that is still a candidate. So without it, a score
+        flip between two boxes of one object silently bypasses FOCUS_MARGIN
+        entirely — and attention does not move to the new winner, it
+        re-derives by raw salience over what is left, which can be a *third*
+        object. Observed with stubs: the panel jumped from "dylan" to a mug and
+        back on the requery cadence, with the margin powerless to stop it.
+        Keeping the incumbent's box makes the whole class impossible, because
+        the track it is holding never leaves the list.
+
+        Score only changes on a requery (every REQUERY_SECONDS), so even
+        without an incumbent the winner is stable between them rather than
+        swapping frame to frame the way a salience-only rule would; the
+        salience tie-break decides only exact score ties, which floats make
+        rare.
+
+        The losers keep their labels and their tracking — they are simply not
+        drawn, not attended to, and not written as sightings, which also stops
+        one object logging a sighting per box. Case-folded, like every other
+        label comparison here, for shards written before labels were
+        lowercased.
+
+        This deliberately means two identical objects in frame — two of the
+        same mug — show one box between them. That is the accepted cost: the
+        labels are the same string, so the robot has nothing to tell them apart
+        with, and drawing the same name twice is the confusing half of it.
+        """
+        # last pass's attention, since this runs before focused() picks the
+        # next one. None or an unknown simply never matches a labelled track.
+        attending = self._incumbent.get("view")
+        best = {}
+        for t in tracks:
+            key = t.label.lower()
+            cur = best.get(key)
+            if cur is None or t is attending:
+                best[key] = t
+            elif cur is not attending and (t.score, t.salience) > (cur.score,
+                                                                  cur.salience):
+                best[key] = t
+        return list(best.values())
 
     def focused(self, tracks, pool):
         """The teach/recognize subject: the most salient stable thing in
@@ -145,11 +254,15 @@ class Robot:
 
     # -- teach -----------------------------------------------------------------
 
-    def teach(self, crop, transcript):
+    def teach(self, crop, transcript, frame=None, box=None):
         """One spoken sentence → one point carrying BOTH named vectors.
 
         Takes the transcript, not the WAV: speech-to-text is slow, so the
         caller runs it before claiming the live-state lock.
+
+        `frame`/`box` are optional and only decorate the memory: they save the
+        wider scene for the memory tab to show. Recognition sees the crop and
+        nothing else, exactly as before.
 
         A crop with little information in it — a blank panel, a reflective
         surface, a blurred fragment — makes a memory that matches most of the
@@ -164,6 +277,7 @@ class Robot:
             label=label,
             transcript=transcript,
             thumb=self._thumb(crop, "taught"),
+            scene=self._scene(frame, box),
         )
         self.log(f'taught "{label[:18]}" -> image + text')
         return {"id": pid, "label": label, "transcript": transcript}
@@ -188,10 +302,69 @@ class Robot:
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')
         return n
 
-    def ignore(self, tid):
+    def rename(self, label, to):
+        """Fix an object's name without touching what it looks like.
+
+        The label is the key everything else matches on — recall dedupes by
+        it, forget deletes by it — so it is lowercased here exactly as
+        `audio.parse_label` lowercases what Whisper heard. Renaming onto a
+        name that already exists deliberately MERGES the two: that is the
+        cure for "Laptop" and "laptop" being two objects, and the memory tab
+        groups by label, so it simply shows one card afterwards.
+        """
+        to = " ".join(to.split()).lower()
+        n = self.memory.rename(label, to)
+        for t in self.detector.tracks.values():
+            # rename in place rather than requerying: the vectors did not
+            # change, so the match is still the same match and the box can
+            # just start saying the new name
+            if t.label and t.label.lower() == label.lower():
+                t.label = to
+        self.log(f'renamed "{label[:14]}" -> "{to[:14]}" ({n} point(s))')
+        return n
+
+    def forget_view(self, pid, label):
+        """Delete ONE taught view — the cure for a single bad crop.
+
+        Teaching an object again adds a view rather than replacing one, so a
+        blurred or half-masked teach stays in memory forever, matching things
+        it shouldn't. This removes just that one.
+
+        If it is the object's last taught view, the whole object goes instead:
+        deleting it alone would leave the label's sightings behind in recall,
+        describing an object the robot can no longer recognize.
+
+        The point must actually be one of this object's taught views, and that
+        is checked here rather than trusted: the id and the label arrive
+        together from a page that may have been looking at a stale list, and
+        two mistakes follow from believing it. A view already dropped from
+        another tab would count as "the last one" and forget the whole object
+        — sightings and all — on a press that asked to delete something that
+        was already gone. And a pid belonging to something else (a sighting,
+        another object's view) would be deleted while the log said otherwise.
+        """
+        ids = self.memory.taught_ids(label)
+        if pid not in ids:
+            return 0, False
+        if len(ids) <= 1:
+            return self.forget(label), True
+        self.memory.forget_point(pid)
+        self.log(f'dropped one view of "{label[:18]}"')
+        return 1, False
+
+    def ignore(self, track, frame=None):
         """Dismiss an unknown so the robot stops offering it — clutter you
-        don't want to teach. Sticky per track, like person suppression."""
-        self.detector.ignore(tid)
+        don't want to teach. Sticky per track, so it stays dismissed.
+
+        Takes the track rather than its id so a picture of what was dismissed
+        can go with it: the memory tab lists these, and "IGNORED x3" with no
+        pictures is not something an operator can undo with any confidence.
+        """
+        self.detector.ignore(track.tid, thumb=self._scene(frame, track.box))
+
+    def unignore(self, tid):
+        """Take one object off the ignore list, from the memory tab."""
+        return self.detector.unignore(tid)
 
     # -- ask -------------------------------------------------------------------
 

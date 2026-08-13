@@ -11,8 +11,13 @@ into the video — which is what lets it lay out for a phone. Controls, in the
 browser tab (laptop keys) or as touch buttons (phone/iPad):
              T / hold TEACH  teach the focused object (speak while held)
              A / hold ASK    ask "what did you see today?" by voice (answers out loud on macOS)
-             F / FORGET      delete what it knows about the recognized object
+             M / MEMORY      everything it knows, with pictures: delete an
+                             object from there, or un-ignore one
              Q / IGNORE      dismiss the current unknown (clutter you won't teach)
+             F               delete what it knows about the object in focus
+                             (keyboard only: a delete aimed by camera is what
+                             the MEMORY tab replaces — see its section in the
+                             README)
              R               close the shard, reload from disk, re-ask (keyboard
                              only: an offline robot makes the point by itself)
 Quit with Ctrl-C in the terminal (no on-screen quit — a stray tap would end
@@ -39,7 +44,7 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 import cv2
 import numpy as np
@@ -148,10 +153,87 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   #teach,#ask { min-height:66px; font-size:clamp(17px,4vw,21px) }
   #teach { background:var(--teal) }
   #ask { background:var(--violet) }
-  #forget,#ignore { min-height:44px; font-size:14px; background:var(--dim) }
-  #forget { background:var(--red) }
+  #memory,#ignore { min-height:44px; font-size:14px; background:var(--dim) }
+  #memory { background:var(--ink) }
   #teach.off { opacity:.4 }
   button.rec { box-shadow:0 0 0 4px #fff inset; filter:brightness(1.25) }
+
+  /* The memory tab: a full-screen sheet, not a third column. A phone has no
+     width to spare, and browsing what the robot knows is a thing you stop to
+     do rather than something to watch alongside the feed. */
+  #mem { position:fixed; inset:0; z-index:9; background:var(--panel);
+         display:none; flex-direction:column }
+  #mem.on { display:flex }
+  #memhead { flex:0 0 auto; display:flex; align-items:center; gap:10px;
+             border-bottom:2px solid var(--line); background:#e2e8ea;
+             padding:calc(10px + env(safe-area-inset-top)) 12px 10px }
+  #memhead h1 { flex:0 0 auto }
+  #memmeta { flex:1; font-size:13px; color:var(--dim) }
+  #memclose { background:var(--ink); min-height:40px; padding:0 18px;
+              font-size:14px }
+  /* auto-fill rather than a breakpoint: two columns on a phone, more on a
+     laptop, and no width where a card is absurdly wide or unreadably narrow.
+     One full-width card per row filled a phone screen with 2.4 objects, which
+     is not a list you can scan. */
+  /* grid-auto-rows:max-content is load-bearing, not tidiness. This grid has a
+     definite height (flex:1 inside a column), and with auto rows the browser
+     fits the rows INTO that height rather than letting them overflow it: rows
+     computed to 132 px against 266 px of card, scrollHeight stayed equal to
+     clientHeight, and every card had its buttons clipped off the bottom with
+     nothing to scroll to. align-content:start does not prevent it -- there is
+     no free space to distribute, the space is negative. Measured, not guessed;
+     it looked fine at four objects purely because the row height the browser
+     picked happened to exceed the content. */
+  #memlist { flex:1; min-height:0; overflow-y:auto;
+             -webkit-overflow-scrolling:touch; display:grid; gap:12px;
+             align-content:start; grid-auto-rows:max-content; padding:12px;
+             max-width:1200px; width:100%; margin:0 auto;
+             grid-template-columns:repeat(auto-fill, minmax(170px, 1fr));
+             padding-bottom:calc(24px + env(safe-area-inset-bottom)) }
+  .obj { border:2px solid var(--line); border-radius:12px; background:#fff;
+         overflow:hidden }
+  /* The object with a margin around it, rather than the gray-masked fragment
+     CLIP compares. `contain`, not `cover`: these are tight crops of arbitrary
+     shape (a standing person is twice as tall as it is wide), and `cover`
+     would fill the box by cutting the ends off the very object the picture
+     exists to show. 4/3 rather than 16/9 because it wastes less width on the
+     tall ones. */
+  .obj img { display:block; width:100%; aspect-ratio:4/3; object-fit:contain;
+             background:var(--line) }
+  .obj .body { padding:9px 11px }
+  .name { font-size:17px; font-weight:700; word-break:break-word }
+  .said { font-size:13px; color:var(--dim); font-style:italic; margin-top:3px }
+  /* Three rows, so cards in a grid line up instead of each deciding for
+     itself whether "7 sightings" left room beside a button: the count gets a
+     full-width line of its own, RENAME and FORGET share the next, and DROP
+     (only on multi-view objects) takes the last. */
+  .foot { display:flex; align-items:center; gap:8px; margin-top:9px;
+          flex-wrap:wrap }
+  .foot .meta { flex:1 0 100% }
+  /* Outlined until armed, then filled red: a grid of solid buttons reads as a
+     page about deleting things, and every one of them takes two taps anyway.
+     Armed text is short ("SURE?") because a 71 px button on a phone cannot
+     hold more without clipping. */
+  .obj button { flex:1 1 0; min-width:0; min-height:36px; padding:0 8px;
+                font-size:12px; background:#fff; color:var(--violet);
+                border:2px solid var(--violet) }
+  /* every modifier below has to out-specify `.obj button` above, hence the
+     repeated prefix: a bare `.del` loses to it and renders violet, and a bare
+     `.drop` loses its own row and squeezes onto the line with the others */
+  .obj button.del { color:var(--red); border-color:var(--red) }
+  .obj button.drop { flex:1 0 100%; color:var(--dim);
+                     border-color:var(--line) }
+  .obj button.un { flex:1 0 100%; color:var(--teal); border-color:var(--teal) }
+  .obj button.armed { background:var(--red); color:#fff;
+                      border-color:var(--red) }
+  .obj button[disabled] { opacity:.5 }
+  .edit { width:100%; font-family:inherit; font-size:17px; font-weight:700;
+          padding:3px 5px; border-radius:6px; border:2px solid var(--violet) }
+  /* display:contents so the ignored cards join the same grid as the objects
+     above them instead of stacking inside one cell. */
+  #igns { display:contents }
+  #igns h2, .wide { grid-column:1/-1; font-size:13px; letter-spacing:.1em;
+                    color:var(--dim); margin:8px 0 0 }
 </style>
 <div id="app">
   <img id="view" src="/stream">
@@ -176,15 +258,28 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     <div id="bar">
       <button id="teach">HOLD&nbsp;&middot;&nbsp;TEACH</button>
       <button id="ask">HOLD&nbsp;&middot;&nbsp;ASK</button>
-      <button id="forget">FORGET</button>
+      <button id="memory">MEMORY</button>
       <button id="ignore">IGNORE</button>
     </div>
   </div>
 </div>
+<div id="mem">
+  <div id="memhead">
+    <h1>MEMORY</h1><span id="memmeta"></span>
+    <button id="memclose">CLOSE</button>
+  </div>
+  <div id="memlist"></div>
+</div>
 <script>
   const $ = id => document.getElementById(id);
   const img = $('view');
-  img.onerror = () => setTimeout(() => { img.src = '/stream?' + Date.now(); }, 1000);
+  // paused is set while the memory tab is up, where the feed is neither
+  // visible nor wanted: dropping it frees the radio for the thumbnails, and
+  // the reconnect below must not fight that by pulling it straight back.
+  let paused = false;
+  img.onerror = () => setTimeout(() => {
+    if (!paused) img.src = '/stream?' + Date.now();
+  }, 1000);
 
   let lock = null;
   const wake = async () => { try { lock = await navigator.wakeLock.request('screen'); } catch (e) {} };
@@ -195,10 +290,19 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
   // the shard and reload it from disk) is keyboard-only on purpose: it is a
   // presenter's beat, not a control anyone should meet on a phone.
   addEventListener('keydown', e => {
+    // Never while typing. The rename field bubbles every keystroke up here, so
+    // without this guard a name is a string of robot commands: "water bottle"
+    // fires a, t, t, r -- two voice actions and a REBOOT of the shard -- f
+    // deletes whatever the camera is looking at, and m closes the sheet, which
+    // blurs the field and commits the half-typed name.
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable)
+      return;
     const k = e.key.toLowerCase();
     if ('tarfq'.includes(k)) fetch('/key?k=' + k);
+    if (k === 'm') $('mem').classList.contains('on') ? closeMem() : openMem();
+    if (k === 'escape') closeMem();
   });
-  $('forget').onclick = () => fetch('/key?k=f');
   $('ignore').onclick = () => fetch('/key?k=q');
 
   // ---- the panel: /state, four times a second -----------------------------
@@ -424,6 +528,212 @@ PAGE = b"""<!doctype html><title>L6 Robot Memory</title>
     btn.addEventListener('pointerup',   e => { e.preventDefault(); stop(k, btn); });
     btn.addEventListener('pointercancel', () => stop(k, btn));
   }
+
+  // ---- the memory tab -----------------------------------------------------
+  // What the robot knows, with pictures, and the two things you can do about
+  // it: forget an object, or take one off the ignore list. FORGET used to act
+  // on whatever the box was on at the instant of the press, which deletes the
+  // wrong object whenever focus moves under a finger already on its way down.
+  // Here you delete the card you are looking at.
+  const PAGE_N = 12;
+  const igns = el('div');
+  igns.id = 'igns';
+  let memAt = 0, memMore = true, memBusy = false, memGen = 0;
+
+  function openMem() {
+    $('mem').classList.add('on');
+    // Let go of the video: on the robot's own hotspot the feed is most of the
+    // radio, and every byte of it is now behind an opaque sheet.
+    paused = true; img.removeAttribute('src');
+    $('memlist').replaceChildren(igns);
+    // A page fetched before this reload must not land in the list after it.
+    // openMem is how every delete and rename redraws, so there is very often
+    // one in flight: without the generation counter the stale response inserts
+    // the card that was just deleted and leaves memAt at its old offset, so
+    // page 0 is never loaded until the tab is closed and reopened. Clearing
+    // memBusy here (rather than waiting for that response) is what lets the
+    // fresh page start immediately; the stale one checks the counter before it
+    // touches anything.
+    memAt = 0; memMore = true; memBusy = false; memGen++;
+    loadPage();
+    loadIgnored();
+  }
+  function closeMem() {
+    if (!$('mem').classList.contains('on')) return;
+    $('mem').classList.remove('on');
+    paused = false; img.src = '/stream?' + Date.now();
+  }
+  $('memory').onclick = openMem;
+  $('memclose').onclick = closeMem;
+
+  async function loadPage() {
+    if (memBusy || !memMore) return;
+    memBusy = true;
+    const gen = memGen;
+    try {
+      const r = await (await fetch(
+        '/memories?offset=' + memAt + '&limit=' + PAGE_N)).json();
+      if (gen !== memGen) return;   // the list was reloaded under us
+      $('memmeta').textContent =
+        r.total + ' object' + (r.total === 1 ? '' : 's') + ' \\u00b7 ' +
+        r.points + ' points';
+      const list = $('memlist');
+      // insertBefore, not append: the ignored section lives at the end of the
+      // same grid and must stay there as pages arrive above it.
+      for (const o of r.objects) list.insertBefore(objCard(o), igns);
+      memAt += r.objects.length;
+      // Stop on a short page as well as on the count, or a delete racing the
+      // scroll leaves this asking for a page that no longer exists forever.
+      memMore = r.objects.length === PAGE_N && memAt < r.total;
+      if (!r.total) list.insertBefore(
+        el('div', 'Nothing taught yet. Point the camera at something and hold '
+                  + 'TEACH.', 'wide'), igns);
+    // only the current generation owns the flag; a stale page clearing it
+    // would let a second fetch start on top of the fresh one
+    } catch (e) {} finally { if (gen === memGen) memBusy = false; }
+  }
+  $('memlist').addEventListener('scroll', () => {
+    const n = $('memlist');
+    if (n.scrollTop + n.clientHeight > n.scrollHeight - 500) loadPage();
+  });
+
+  function objCard(o) {
+    const card = el('div', null, 'obj');
+    const pic = el('img'), said = el('div', null, 'said');
+    const cap = el('div', null, 'meta');
+    let i = 0;
+    const drop = armedBtn('DROP THIS VIEW', 'drop', () =>
+      post('/forget_view?id=' + o.views[i].id +
+           '&label=' + encodeURIComponent(o.label)));
+    const show = () => {
+      const v = o.views[i];
+      pic.src = '/thumb?f=' + encodeURIComponent(v.scene || v.thumb || '');
+      said.textContent = v.transcript ? '\\u201c' + v.transcript + '\\u201d' : '';
+      cap.textContent = 'view ' + (i + 1) + ' of ' + o.views.length +
+                        ' \\u00b7 ' + v.when + (v.where ? ' \\u00b7 ' + v.where : '');
+    };
+    // Tap the picture to walk this object's taught views. Re-teaching adds
+    // one rather than replacing it -- that is what makes recognition work from
+    // more than one angle -- and this is the only way to see whether the
+    // second one was any good. DROP THIS VIEW acts on whichever one is showing.
+    // disarm on the way: DROP acts on whichever view is showing, so an armed
+    // button plus a tap on the picture would delete a different one than the
+    // one that was armed
+    pic.onclick = () => {
+      i = (i + 1) % o.views.length; show(); drop.disarm();
+    };
+    show();
+    const name = el('div', o.label, 'name');
+    const foot = el('div', null, 'foot');
+    foot.append(el('div', o.seen + ' sighting' + (o.seen === 1 ? '' : 's'), 'meta'),
+                renameBtn(o.label, name),
+                armedBtn('FORGET', 'del', () =>
+                  post('/forget?label=' + encodeURIComponent(o.label))));
+    // only when there is more than one: with a single view, dropping it and
+    // forgetting the object are the same act, and one button for it is clearer
+    if (o.views.length > 1) foot.append(drop);
+    const body = el('div', null, 'body');
+    body.append(name, said, cap, foot);
+    card.append(pic, body);
+    return card;
+  }
+
+  const post = url => fetch(url, { method: 'POST' }).catch(() => {});
+
+  function armedBtn(text, cls, action) {
+    const b = el('button', text, cls);
+    let armed = 0;
+    b.disarm = () => {
+      armed = 0; b.textContent = text; b.classList.remove('armed');
+    };
+    b.onclick = async () => {
+      // Arm on the first tap, act on the second. A list you scroll with your
+      // thumb is a list you will tap by accident, and neither of these can be
+      // undone -- the vectors are gone.
+      if (Date.now() > armed) {
+        armed = Date.now() + 4000;
+        b.textContent = 'SURE?';
+        b.classList.add('armed');
+        setTimeout(() => {
+          if (Date.now() > armed) {
+            b.textContent = text; b.classList.remove('armed');
+          }
+        }, 4200);
+        return;
+      }
+      b.disabled = true;
+      await action();
+      openMem();  // redraw from the shard, so the count is the robot's, not ours
+    };
+    return b;
+  }
+
+  // Rename in place: the name becomes a text field. This is the cure for
+  // whisper-base hearing "laptop" as "La-caw" -- the vectors were fine, only
+  // the word was wrong, and forgetting the object to fix a typo threw away
+  // every view of it.
+  function renameBtn(label, name) {
+    const b = el('button', 'RENAME', 'ren');
+    b.onclick = () => {
+      const inp = document.createElement('input');
+      inp.className = 'edit'; inp.value = label; inp.maxLength = 40;
+      inp.autocapitalize = 'none'; inp.spellcheck = false;
+      name.replaceWith(inp);
+      inp.focus(); inp.select();
+      let done = false;
+      // one guard for both exits: Enter fires, then the blur it causes fires
+      // again, and the second one would post the rename twice
+      const finish = async save => {
+        if (done) return;
+        done = true;
+        const to = inp.value.trim();
+        // compared exactly, not case-folded: fixing the capitals is a real
+        // rename on a shard written before labels were lowercased, and it is
+        // the only way to change what an old card displays
+        if (save && to && to !== label) {
+          await post('/rename?label=' + encodeURIComponent(label) +
+                     '&to=' + encodeURIComponent(to));
+          openMem();
+        } else {
+          inp.replaceWith(name);
+        }
+      };
+      inp.onkeydown = e => {
+        if (e.key === 'Enter') finish(true);
+        if (e.key === 'Escape') finish(false);
+      };
+      inp.onblur = () => finish(true);
+    };
+    return b;
+  }
+
+  async function loadIgnored() {
+    igns.replaceChildren();
+    const gen = memGen;
+    let r;
+    try { r = await (await fetch('/ignored')).json(); } catch (e) { return; }
+    if (gen !== memGen) return;   // same staleness guard as loadPage
+    if (!r.ignored.length) return;
+    igns.append(el('h2', 'IGNORED \\u00b7 ' + r.ignored.length +
+                        ' this session (nothing was stored)'));
+    for (const g of r.ignored) {
+      const card = el('div', null, 'obj');
+      const pic = el('img');
+      if (g.thumb) pic.src = '/thumb?f=' + encodeURIComponent(g.thumb);
+      const b = el('button', 'TRACK AGAIN', 'un');
+      b.onclick = async () => {
+        b.disabled = true;
+        try { await fetch('/unignore?tid=' + g.tid, { method: 'POST' }); } catch (e) {}
+        loadIgnored();
+      };
+      const foot = el('div', null, 'foot');
+      foot.append(el('div', 'ignored at ' + g.when, 'meta'), b);
+      const body = el('div', null, 'body');
+      body.append(foot);
+      card.append(pic, body);
+      igns.append(card);
+    }
+  }
 </script>
 """
 
@@ -565,6 +875,32 @@ class StreamHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def _query(self, key, default=None):
+        """One query-string value, or `default`."""
+        vals = parse_qs(urlparse(self.path).query).get(key)
+        return vals[0] if vals else default
+
+    def _int(self, key, default):
+        """A non-negative integer query value. Anything else is the default —
+        these arrive from a URL, and a typo should not be a traceback. Pass a
+        non-negative default: the clamp applies to it too."""
+        try:
+            return max(0, int(self._query(key, default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _send_json(self, obj, status=200):
+        """Content-Length on every JSON reply, and never cached: a frozen
+        panel beside a moving video is a horrible thing to diagnose in a room,
+        and a stale memory list would still offer an object just deleted."""
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         try:
             if self.path.startswith("/cert.crt") and self.cert:
@@ -588,13 +924,15 @@ class StreamHandler(BaseHTTPRequestHandler):
                 # that it is noise beside the video, and it means the panel is
                 # laid out by the browser instead of being drawn at a fixed
                 # pixel width into a frame the phone then shrinks.
-                body = json.dumps(self.app.state()).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json(self.app.state())
+            elif self.path.startswith("/memories"):
+                # One page of the memory tab. Paged so the list can be scrolled
+                # rather than built in one lump on a phone.
+                self._send_json(self.app.memories(
+                    offset=self._int("offset", 0),
+                    limit=self._int("limit", 12)))
+            elif self.path.startswith("/ignored"):
+                self._send_json(self.app.ignored())
             elif self.path.startswith("/thumb?f="):
                 # A taught or remembered view, by filename. `.name` drops any
                 # directory part, so nothing outside the thumbs directory is
@@ -670,6 +1008,35 @@ class StreamHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(n)
                 self.send_response(self.app.on_audio(kind, body))
                 self.end_headers()
+            # The two mutations the memory tab makes. POST, and answered with
+            # the result rather than a 204: the tab redraws from what the robot
+            # says happened, so a delete that found nothing cannot leave a card
+            # on screen that no longer exists.
+            # /forget_view first: it also starts with "/forget"
+            elif self.path.startswith("/forget_view"):
+                label, pid = self._query("label"), self._int("id", 0)
+                self._send_json(
+                    self.app.forget_view(pid, label)
+                    if label and pid else {"n": 0},
+                    200 if label and pid else 400)
+            elif self.path.startswith("/forget"):
+                label = self._query("label")
+                self._send_json(
+                    {"label": label, "n": self.app.forget_label(label)}
+                    if label else {"n": 0}, 200 if label else 400)
+            elif self.path.startswith("/rename"):
+                label, to = self._query("label"), self._query("to", "")
+                # capped here, not only in the page (which stops at 40): a
+                # label is a key that recall reads out loud and every card
+                # shows, and nothing else limits what a POST can write
+                to = " ".join((to or "").split())[:60]
+                self._send_json(
+                    {"label": label, "to": to,
+                     "n": self.app.rename(label, to)}
+                    if label and to else {"n": 0}, 200 if label and to else 400)
+            elif self.path.startswith("/unignore"):
+                tid = self._int("tid", 0)  # track ids start at 1, so 0 misses
+                self._send_json({"tid": tid, "ok": self.app.unignore(tid)})
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -697,8 +1064,8 @@ class LiveApp:
         self.busy = False  # a voice action is running; ignore T/A meanwhile
         # What the robot attends to lives on the robot (see Robot.attention),
         # decided by the detect thread that owns track state.
-        self.pending_crop = None   # crop stashed when a teach starts
-        self.pending_track = None  # ...and the track it came from
+        self.pending_teach = None  # (crop, frame, box) stashed when a teach starts
+        self.pending_track = None  # ...and the track they came from
         self.stop = threading.Event()
         self.frame_at = None       # monotonic stamp of the last frame (_watchdog)
 
@@ -772,6 +1139,112 @@ class LiveApp:
             "events": r.events[-3:],
         }
 
+    def memories(self, offset=0, limit=12):
+        """One page of "what do you know?", newest object first.
+
+        The whole point of the tab: FORGET used to act on whatever the box
+        happened to be on, so a press that landed as focus moved deleted the
+        wrong object — and there was no way to see what had been learned
+        without pointing the camera at it again.
+
+        The grouping scans every taught point per page, which is single digits
+        of points at demo scale. If a shard ever holds hundreds of objects,
+        page the scroll itself rather than slicing here.
+        """
+        with self.lock:  # a REBOOT mid-scroll would read a closed shard
+            objects = self.robot.memory.objects()
+        return {
+            "total": len(objects),
+            "offset": offset,
+            "points": self.mem_count,
+            "objects": [{
+                "label": o["label"],
+                "seen": o["seen"],
+                "views": [self._view_json(v) for v in o["views"]],
+            } for o in objects[offset:offset + limit]],
+        }
+
+    @staticmethod
+    def _view_json(payload):
+        """One taught view. `scene` is the unmasked picture of the object with
+        a margin around it (see Robot._scene) and falls back to the crop, so
+        points written before scenes existed still show a picture rather than
+        a hole."""
+        thumb = payload.get("thumb")
+        scene = payload.get("scene") or thumb
+        return {
+            # A STRING on purpose, so one view can be dropped on its own.
+            # Point ids come from itertools.count(time.time_ns()), so they are
+            # around 1.8e18 — past JavaScript's 2^53 safe integer, where JSON
+            # numbers silently round. The page would then ask to delete an id
+            # that does not exist and the view would quietly survive its own
+            # deletion. As text it round-trips exactly; the server parses it
+            # back to an int.
+            "id": str(payload["id"]),
+            "when": time.strftime("%b %-d, %H:%M",
+                                  time.localtime(payload.get("ts") or 0)),
+            "transcript": payload.get("transcript"),
+            "where": payload.get("where"),
+            "thumb": Path(thumb).name if thumb else None,
+            "scene": Path(scene).name if scene else None,
+        }
+
+    def ignored(self):
+        """What IGNORE has dismissed this session, for the tab to undo.
+
+        Under the lock like every other reader of shared state: the key thread
+        adds to that dict on a Q press and /unignore removes from it, and
+        iterating it while either happens raises `dictionary changed size
+        during iteration` — which would land as a traceback on the HTTP thread,
+        not in the tab.
+        """
+        with self.lock:
+            dismissed = self.robot.detector.ignored()
+        return {"ignored": [{
+            "tid": g["tid"],
+            "when": time.strftime("%H:%M", time.localtime(g["ts"])),
+            "thumb": Path(g["thumb"]).name if g.get("thumb") else None,
+        } for g in dismissed]}
+
+    def forget_label(self, label):
+        """Delete one object by name — from the tab, or from the F key."""
+        with self.lock:
+            n = self.robot.forget(label)
+            self.mem_count = self.robot.memory.count()
+        self.card = ("forgot", (label, n))
+        self.banner = f'forgot "{label}"'
+        return n
+
+    def rename(self, label, to):
+        """Rename one object, from the tab. No vectors move — see Robot.rename."""
+        with self.lock:
+            n = self.robot.rename(label, to)
+        self.banner = f'renamed to "{to}"'
+        return n
+
+    def forget_view(self, pid, label):
+        """Drop one taught view of an object, from the tab."""
+        with self.lock:
+            n, whole = self.robot.forget_view(pid, label)
+            self.mem_count = self.robot.memory.count()
+        if whole:
+            # it was the last view, so the object itself is gone — say so with
+            # the same card FORGET uses, or the tab looks like it over-deleted
+            self.card = ("forgot", (label, n))
+            self.banner = f'that was the last view of "{label}" — forgot it'
+        elif n:
+            self.banner = f'dropped one view of "{label}"'
+        else:
+            # the page was looking at a list that has since changed
+            self.banner = "that view is already gone"
+        return {"n": n, "whole": whole, "label": label}
+
+    def unignore(self, tid):
+        with self.lock:
+            ok = self.robot.unignore(tid)
+        self.banner = "tracking that again" if ok else "that isn't ignored"
+        return ok
+
     def _card_json(self):
         """The last action's result: taught, forgot, or an answer."""
         card = self.card
@@ -817,7 +1290,23 @@ class LiveApp:
         self._seq += 1
         self.shot = (self._seq, buf.tobytes())
 
-    def _voice_action(self, kind, crop):
+    def _teach_target(self, track):
+        """Everything a teach needs from the live view, grabbed in one go:
+        the crop that gets embedded, and the whole frame it sits in for the
+        memory tab to show later. None when there is nothing to teach.
+
+        Copied, not referenced: the detect thread keeps rewriting a track's
+        crop, and the object may well have moved by the time the finger lifts
+        six seconds later.
+        """
+        if track is None or track.crop is None:
+            return None
+        frame = self.latest
+        return (track.crop.copy(),
+                None if frame is None else frame.copy(),
+                track.box)
+
+    def _voice_action(self, kind, target):
         """Laptop escape hatch: record via sounddevice, then process. The
         phone path uploads its own WAV and calls _process directly."""
         wav = UTTERANCE_WAV
@@ -834,17 +1323,17 @@ class LiveApp:
             self.banner = "mic failed: check MIC_DEVICE in robot/audio.py"
             self.busy = False
             return
-        self._process(kind, wav, crop, heard=spoke)
+        self._process(kind, wav, target, heard=spoke)
 
-    def _phone_audio(self, kind, body, crop):
+    def _phone_audio(self, kind, body, target):
         """Phone hold-to-talk: the uploaded WAV replaces the sounddevice
         recording; everything downstream is identical to the laptop mic."""
         wav = UTTERANCE_WAV
         with open(wav, "wb") as f:
             f.write(body)
-        self._process(kind, wav, crop)
+        self._process(kind, wav, target)
 
-    def _process(self, kind, wav, crop, heard=None):
+    def _process(self, kind, wav, target, heard=None):
         """Silence guard → transcribe → teach/ask, off the main loop so the
         feed never freezes. Shared by both mic paths; clears `busy` when done.
 
@@ -876,8 +1365,9 @@ class LiveApp:
             # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
             if kind == "t":
+                crop, frame, box = target
                 with self.lock:
-                    taught = self.robot.teach(crop, q)
+                    taught = self.robot.teach(crop, q, frame=frame, box=box)
                     self.mem_count = self.robot.memory.count()
                     if self.pending_track is not None:
                         # the beat: watch that one box turn green. One embed,
@@ -926,9 +1416,8 @@ class LiveApp:
                          daemon=True).start()
         if kind == "t":
             f = self.robot.teachable
-            got = f is not None and f.crop is not None
-            self.pending_crop = f.crop.copy() if got else None
-            self.pending_track = f if got else None
+            self.pending_teach = self._teach_target(f)
+            self.pending_track = f if self.pending_teach else None
 
     def on_audio(self, kind, body):
         """Phone released hold-to-talk with a WAV. Returns an HTTP status.
@@ -937,12 +1426,12 @@ class LiveApp:
         check-and-set on `busy` below is not atomic."""
         if self.busy:
             return 409
-        if kind == "t" and self.pending_crop is None:
+        if kind == "t" and self.pending_teach is None:
             self.banner = "nothing in focus to teach"
             return 409
         self.busy = True
-        crop = self.pending_crop if kind == "t" else None
-        threading.Thread(target=self._phone_audio, args=(kind, body, crop),
+        target = self.pending_teach if kind == "t" else None
+        threading.Thread(target=self._phone_audio, args=(kind, body, target),
                          daemon=True).start()
         return 202
 
@@ -1084,15 +1573,15 @@ class LiveApp:
     def _handle_key(self, key):
         focused, teachable = self.robot.attention, self.robot.teachable
         if key == "t" and not self.busy:
-            if teachable is None or teachable.crop is None:
+            target = self._teach_target(teachable)
+            if target is None:
                 self.banner = "nothing new to teach"
                 return
             self.busy = True
             # remember which track this taught, so only that one re-asks
             # memory afterwards instead of every box on screen
             self.pending_track = teachable
-            threading.Thread(target=self._voice_action,
-                             args=("t", teachable.crop.copy()),
+            threading.Thread(target=self._voice_action, args=("t", target),
                              daemon=True).start()
         elif key == "a" and not self.busy:
             self.busy = True
@@ -1100,24 +1589,22 @@ class LiveApp:
                              args=("a", None),
                              daemon=True).start()
         elif key == "f":
-            # forget the recognized object the panel is showing (focused)
+            # forget the recognized object the panel is showing (focused).
+            # Keyboard only now: aiming a delete with the camera is what the
+            # memory tab exists to replace, but it is still the fastest beat to
+            # film, and a key is not something a thumb lands on by accident.
             if focused is None or not focused.label:
                 self.banner = "nothing recognized to forget"
             else:
-                label = focused.label
-                with self.lock:
-                    n = self.robot.forget(label)
-                    self.mem_count = self.robot.memory.count()
-                self.card = ("forgot", (label, n))
-                self.banner = f'forgot "{label}"'
+                self.forget_label(focused.label)
         elif key == "q":
             # dismiss the current unknown so the robot stops offering it
             if teachable is None:
                 self.banner = "no unknown to ignore"
             else:
                 with self.lock:
-                    self.robot.ignore(teachable.tid)
-                self.banner = "ignored, won't track that"
+                    self.robot.ignore(teachable, self.latest)
+                self.banner = "ignored · undo it in MEMORY"
         elif key == "r":
             with self.lock:
                 n, ms = self.robot.reboot()
