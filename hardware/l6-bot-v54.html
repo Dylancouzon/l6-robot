@@ -1,0 +1,1724 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>L6 bot v5.4 — printable</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.184.0/build/three.module.js",
+    "three/addons/controls/OrbitControls.js": "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js",
+    "three/addons/exporters/OBJExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js",
+    "three/addons/exporters/GLTFExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js",
+    "three-mesh-bvh": "https://unpkg.com/three-mesh-bvh@0.9.1/build/index.module.js",
+    "manifold-3d": "https://unpkg.com/manifold-3d@3.2.1/manifold.js",
+    "fflate": "https://unpkg.com/fflate@0.8.2/esm/browser.js"
+  },
+  "integrity": {
+    "https://unpkg.com/three@0.184.0/build/three.module.js": "sha384-8FCZ1eVO6it4+pbec2aDtnTrwjWXZLJRC+MAGCIPDgsYnUrl/E0A2YlF8ioMKI/J",
+    "https://unpkg.com/three@0.184.0/build/three.core.js": "sha384-dw2ooPewaEIrAgl6oFDBmmBWCE9oW9LxRGcfwZ0hLvEprzo202wXl7vCYHRlSnOT",
+    "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js": "sha384-4rziNxOBZKQ69i+w+f89KJ55TCYquwchVbByQwmaOeIOXdOU2PLDn3kOfXHwIJC9",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js": "sha384-nbwtoZENJD3Vq+ACK0CuGQdPMuDWHkamC2KJD70EV5nfg6jQjfppKOea07YJN+N3",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js": "sha384-VofkvpG6HERhFCYbsUOHeNXBCqID2nfqkQqnVzE1jc/oPcz+qJ13ADdXH08hE+cQ"
+  }
+}
+</script>
+<style>
+  html,body{margin:0;height:100%}
+  three-d-stage:not(:defined){visibility:hidden}
+  #hud{position:fixed;top:14px;left:14px;z-index:10;font:13px/1.45 system-ui,sans-serif;color:#2a2a2e;max-width:370px}
+  #hud .row{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+  #hud button{font:600 13px system-ui;padding:7px 14px;border-radius:8px;border:1px solid #c9c2b4;background:#faf8f3;color:#2a2a2e;cursor:pointer}
+  #hud button.on{background:#2b2b2f;color:#faf8f3;border-color:#2b2b2f}
+  #hud button:disabled{opacity:.5;cursor:default}
+  #hud details{background:#faf8f3ee;border:1px solid #d8d2c4;border-radius:10px;padding:10px 12px;max-height:60vh;overflow:auto;margin-bottom:8px}
+  #hud summary{font-weight:700;cursor:pointer}
+  #hud h4{margin:10px 0 3px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#8a6b52}
+  #hud ol,#hud ul{margin:2px 0;padding-left:18px}
+  #hud li{margin:2px 0}
+  #hud .mut{color:#6b6659}
+  #report{font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+  #report .ok{color:#2f6b3a}
+  #report .bad{color:#a52a2a;font-weight:700}
+  #report .warn{color:#8a6b52}
+  #report .hd{font-weight:700;color:#2a2a2e}
+  #boot{position:fixed;inset:0;display:grid;place-items:center;background:#e9e5dd;font:14px system-ui;color:#6b6659;z-index:20}
+</style>
+<template id="__bundler_thumbnail">
+
+</template>
+</head>
+<body>
+<div id="boot">building solids…</div>
+<three-d-stage name="l6-bot-v5" background="#e9e5dd" autorotate></three-d-stage>
+<div id="hud">
+  <div class="row">
+    <button id="bAsm" class="on">Assembled</button>
+    <button id="bPlate">Print layout</button>
+    <button id="bGhost" class="on">Hardware ghosts</button>
+  </div>
+  <div class="row">
+    <button id="b3mfC">3MF · charcoal plate</button>
+    <button id="b3mfW">3MF · white</button>
+    <button id="b3mfR">3MF · red</button>
+    <button id="bStl">STLs</button>
+  </div>
+  <details id="auditBox" open>
+    <summary>Mesh + clearance audit</summary>
+    <div class="row" style="margin:8px 0 6px">
+      <button id="bAudit">Re-check</button>
+    </div>
+    <div id="report" class="mut">Checking…</div>
+  </details>
+  <details>
+    <summary>Print &amp; assembly guide</summary>
+    <h4>v5.5 — the Jetson is a press fit, and the ties are gone</h4>
+    <ul>
+      <li><b>The gap was 2.77&nbsp;mm, not 1.5.</b> Measured, not estimated — so 1.5 would have left 1.27&nbsp;mm of slack and changed nothing. And the ceiling is not the whole camera head: it is a <b>16.8&nbsp;mm band</b> of it at y&nbsp;−21.1…−4.3. Everywhere else the kit has open sky.</li>
+      <li><b>The take-up is built UP FROM THE FLOOR, not down from the head</b> — forced by the print, not a preference. The keel prints upright, so the head's underside faces the bed: any boss or rib hung off it starts its first layer <b>in mid-air</b>. The bay floor faces the other way. Same joint, same squeeze, only one of the two is printable. So the bay floor rises <b>2.4&nbsp;mm solid</b> and the kit presses <em>up</em> into the head; the reaction is the disc.</li>
+      <li><b>What it presses against — measured, and not what I assumed.</b> The head's underside there is not flat and not the 55° chamfer: from y&nbsp;−19 to −11 it is the head plate's own face, <b>tilted 8.6° by the eye axis</b> (147.27&nbsp;→&nbsp;146.15), and the steep cut only starts past y&nbsp;−10. A flat pad parallel to the kit's top is not available and never can be — a horizontal face there is a 35 × 19&nbsp;mm overhang, which is <em>why</em> that underside is angled. So the contact is a <b>35&nbsp;mm line across the kit's top at y&nbsp;−11.5</b>, opening to a 2.6&nbsp;mm band at the working squeeze. That is the right answer, not a consolation: a line does not ask two rigid bodies to be parallel.</li>
+      <li><b>Four crush pads carry the entire compliance</b> — 0.8&nbsp;mm tall, on the raised floor at y&nbsp;±28, under the kit's stiff ends. A rigid 0.33&nbsp;mm squeeze between two rigid bodies is a coin toss: the keel's own z is accurate to a layer, but <b>the kit's height is a number we do not control</b>, and ±0.4 on it swings the joint from 0.7&nbsp;mm of interference to 0.1&nbsp;mm of rattle. The pads yield locally instead of jacking the kit against the head. They crush 41% of their height at nominal.</li>
+      <li><b>The zip ties are deleted</b> — both structural ones, and their four slots with them. The press fit carries the kit now: pads below, head plate above, 36.4&nbsp;mm of shoe either side. One tie is left in the whole build, on the camera flex, and it is strain relief. A tie that holds nothing is a hole in a stiffener — but if the press proves insufficient on a real kit, four cubes bring the slots straight back.</li>
+      <li><b>It goes in ANGLED, and it always did.</b> Swept straight up the kit hits <b>3936&nbsp;mm³</b> of camera head — all of it in that one band — so it could never have been lifted straight out, and no assembly step ever said so. Step&nbsp;1 says it now. No entry relief is needed: rotating about its far end, a <b>0.2°</b> tilt clears the squeeze. (I cut two reliefs first and measured them removing nothing — they are not in the part.)</li>
+      <li><b>Audit:</b> <code>keel ∩ jetson</code> is no longer required to be zero — it carries a <b>20&nbsp;mm³ budget</b> and measures <b>16.0</b>. Over is a clash, under is the press fit, and the number is printed either way. <b>Measure your kit's height before printing</b>: <code>KIT_LIFT</code> is the single constant that corrects it.</li>
+      <li><b>What did NOT move.</b> <code>PAN_TOP</code>/<code>PAN_BOT</code> are decoupled from the kit now, so every member still roots at z39.1 into the disc — same welds, same 7530&nbsp;mm² first layer, same 159.6&nbsp;mm height. §6.5's rule is about the <em>camera</em> stack, and the kit is downstream of it: <code>KIT_Z0</code> was always derived from the camera, never the other way round.</li>
+      <li><b>What DID move — the honest cost line: volume.</b> The 2.4&nbsp;mm solid floor rise took the keel from 94 to <b>102.8&nbsp;cm³</b>: ~9% more filament and print time on the part that already loses most of a day if it fails. That is the price of the press fit, and it is the one number in “same welds, same first layer, same height” that is not the same.</li>
+    </ul>
+    <h4>v5.4 — the keel and the floor are one part</h4>
+    <ul>
+      <li><b>Seven printed parts, not eight.</b> The floor puck is gone as a part — it is the keel's own foot now. <code>l6b1_floor</code> is not exported any more; <code>l6b1_keel</code> carries the Ø99 disc, the three twist-lock lugs and the cradle as one solid.</li>
+      <li><b>Why it costs nothing to merge.</b> The two already printed in the same orientation: the puck went <b>bottom-face down</b>, the keel goes <b>upright on its pan</b>, and the pan is parallel to the disc. Same axis, same down. The merged part prints exactly as the keel already did, standing on the disc instead of the pan.</li>
+      <li><b>And the joint never articulated.</b> Sliding the keel onto the puck was assembly step&nbsp;1; from then on nothing moved relative to it. A joint made once and never moved is a joint you can delete — so the <b>43.2 keel slot, the tab channel, its 45° ramp, the two hook blocks, the two detent bumps and the keel's two slide tabs</b> are all gone, along with assembly step 1, the service step and the <code>floor∩keel</code> clash pair.</li>
+      <li><b>First layer 4097 → 7530&nbsp;mm²</b> (measured), and the disc reaches <b>28&nbsp;mm forward</b> of the pan's old front edge — which is the direction the mass leans. The brim is now belt-and-braces rather than the thing keeping it on the bed. <b>159.6&nbsp;mm tall, 102.8&nbsp;cm³</b>, one body after the 0.2&nbsp;mm erosion check, and the one support patch (head underside, print z108) is unchanged.</li></li>
+      <li><b>The kit's seat plane did not move.</b> The bay floor is <b>z40.3</b>, exactly where the pan's top face was, so nothing above z40.4 changes by a layer (§6.5). Under the kit there is now <b>3.9&nbsp;mm of solid</b> where there was 2.7 + a 0.4 gap + 1.2 — same material, minus the gaps.</li>
+      <li><b>It closes a tolerance as well.</b> The 0.4&nbsp;mm/side slot fit is gone, and with it the 0.15&nbsp;mm of lateral camera offset that fit allowed. The welds improve too: every member still runs 1.2&nbsp;mm down <em>through</em> the bay floor into solid material (back plate alone, 386&nbsp;mm³), and the −x land now stands 3.3&nbsp;mm against the back plate's whole 92&nbsp;mm outer face — a stiffener the split geometry could not have.</li>
+      <li><b>The bay is closed in y at ±47.5</b>, not run through as the old slot was. The slide-in is gone, so the disc stays a continuous ring, and the end webs' outer faces land against retained full-height land.</li>
+      <li><b>What it costs, and it is real: a failed print now loses both parts</b> — ~103&nbsp;cm³ and most of a day, instead of just the keel. You also lose the option of reprinting one keel for a different dev kit and keeping the puck — free before, not free now.</li>
+      <li><b>It exposed a clash nobody had ever tested.</b> Merging forced <code>keel∩plugs</code> into the matrix, and it reported <b>30.8&nbsp;mm³</b>: the +y end web has been standing <b>4.4&nbsp;mm inside the barrel plug's path since v5</b> (plug reaches z54.4, the notch roof stopped at z50). v5 checked <code>floor∩plugs</code> and never <code>keel∩plugs</code> — absence from the matrix is indistinguishable from an untested pair. Fixed as a <b>doorway</b>: 17 wide × z36–56, cut open past the web's top rather than up to a 0.6&nbsp;mm lintel over a 14&nbsp;mm span, leaving two ~12.7&nbsp;mm pillars that still stop the kit lengthwise. 17, not 14, because the old notch matched the plug's width <em>exactly</em> — 0.00&nbsp;mm/side to a real plug on a real cable.</li>
+      <li><b>The lug-angle constraint relaxed and the angles did not.</b> 90°→115° was forced by the slot and the tab channel, both of which are gone — but the spacing stays 100/90/170°, because keying the insertion orientation is a separate reason.</li>
+      <li><b>Audit:</b> the bore check now measures the keel <b>above the lug band</b> (z&gt;43.6) against r50 and the lugs on their own against the r52.1 arc slot — exempting the part outright, as v5 did with the puck, would now exempt the whole cradle. Everything the puck was checked against (kit, plug, camera, cable) is still checked, as part of the keel; that the two do not interfere is now answered by the weld check instead of a clash pair.</li>
+    </ul>
+    <h4>v5 — the keel has a bottom</h4>
+    <ul>
+      <li><b>What went wrong.</b> The keel's base was four separate members — back plate, front wall, two end webs — and they met <em>only</em> where the Ø99 clip had already eaten their corners: <b>0.13&nbsp;mm</b> of contact at the back plate and <b>0.03&nbsp;mm</b> at the front wall. That is a connected mesh and a slicer that sees nothing, so it printed as four loose pieces. The old audit reported “1 piece” and was telling the truth.</li>
+      <li><b>Why it cannot be fixed at that height.</b> The kit's 35 × 90.5 footprint puts its corners at <b>r48.5</b> and the bore allows <b>r49.5</b>. Any closed loop <em>around</em> the kit has to squeeze through 0.98&nbsp;mm minus clearance — thinner than two extrusions, wherever you put it, whatever shape it is. The tie has to go <b>under</b> the kit.</li>
+      <li><b>So the keel got a floor.</b> A 1.2&nbsp;mm pan at <b>z39.1–40.3</b>, spanning the whole base footprint, welded to all four members over ~700&nbsp;mm² instead of 0.16. First layer goes from <b>754 → ~3800&nbsp;mm²</b>, which also fixes the real risk with a 152&nbsp;mm part whose mass leans forward.</li>
+      <li><b>And the puck paid for it, exactly.</b> The kit pocket is deleted; the puck's top face drops 4.5&nbsp;mm to z39.1 across a full-width slot, and the pan fills that slot. <b>The kit still stands at z40.4</b> — the same plane it stood on in v4, which was the pocket floor. Nothing above z40.4 moves by a layer: board, lens, visor, shell, eye axis all untouched.</li>
+      <li><b>What is left of the puck</b> is a 2.7&nbsp;mm disc (z36.4–39.1 under the keel, full 7.2&nbsp;mm at the rim for the lugs) plus two lands at x&lt;-21.9 and x&gt;21.0. The lands stiffen the disc into a channel section, carry all three lugs, and the -x land <b>is</b> the hook: the tabs run in a channel cut through it, so the separate hook blocks are gone (two short ones stay, to raise the land where the tabs come to rest so the channel's 45° roof traps 3.5&nbsp;mm of tab).</li>
+      <li><b>One lug moved: 90° → 115°.</b> The slot is open at both ends of y because the keel still arrives by sliding forward, so no lug may sit inside x -21.9…21.0 <em>or</em> across the tab channel at x -27.7…-20.7. At 90+18° it did both. Locked spacing is now 100/90/170° — still unique under rotation, and the entry channel is clear of the rear arch (it used to drop straight through it).</li>
+      <li><b>The audit now looks for this class of fault.</b> <code>decompose()</code> counts bodies and can never see a 0.13&nbsp;mm weld. So every part is now <b>eroded 0.2&nbsp;mm horizontally</b> — intersected with itself nudged in eight compass directions — and its bodies re-counted: any neck narrower than one 0.4&nbsp;mm extrusion in plan view falls apart, and nothing that is genuinely one wall does. v4's keel splits into four. Horizontal is the only direction that matters, because it is the one a nozzle cannot bridge.</li>
+      <li><b>Check before you print:</b> the kit is 0.1&nbsp;mm above the pan and its top corner still clears the camera head by 1.2&nbsp;mm. Both numbers are unchanged, and both are in the clearance report.</li>
+    </ul>
+    <h4>v4 — the real camera module, and no fasteners</h4>
+    <ul>
+      <li><b>The platform was too small.</b> The board is <b>37 × 37</b> and the lens is <b>26&nbsp;mm long</b> (Ø24 barrel, Ø17 clear aperture, 1.5&nbsp;mm of screw focus beyond that). That fixes everything else: the board's back face — the seat plane — sits <b>37.4&nbsp;mm behind the visor's outer face</b>, and the barrel front is recessed <b>8.8&nbsp;mm</b> behind it (11.6 at the tile's lower rim, which the eye's 8.6° tilt pushes further out). Both figures are measured off the built tile, not off <code>TILE_S</code> — the constant says 3.5 where the surface it names is at 2.8. That recess is not styling, and it is not the board that sets it: the widest thing on the whole sub-assembly is the <b>lens holder's own front rim</b> (z166), because it reaches furthest toward the skin. Pulled 4&nbsp;mm further forward it stood at r49.9 of the r50 bore — 0.1&nbsp;mm from not going in at all. As built it is r46.1. The lens cannot come forward; the hole has to do the work instead.</li>
+      <li><b>Which is why the dev kit had to come down 11.6&nbsp;mm.</b> A 37&nbsp;mm board reaching 18.5&nbsp;mm below the eye axis lands exactly where the kit's top corner used to be (z155). v3 hid that by notching the platform 0.6&nbsp;mm clear of the kit. Instead the floor puck went 10.8 → 6.4&nbsp;mm thick and gained a 3.1&nbsp;mm pocket, so the kit now stands at z40.4 and its top face is z143.4. Nothing is notched. The tightest point on the whole cradle is <b>0.65&nbsp;mm</b> (keel to kit, measured as a minimum gap over both solids) and <b>0.10&nbsp;mm</b> from the puck's pocket wall — measure your own kit before printing the puck.</li>
+      <li><b>The connectors are measured, and deliberately not fitted.</b> Two connectors, both on the board's <b>back</b> face: the black 3-row block (14.0 × 10.3, 2.9–14.1&nbsp;mm down from the top edge) and the white 4-pin (7.3 × 3.6, near the bottom edge). Measured to ±0.15&nbsp;mm — which is exactly why neither gets a pocket shaped to it. A frame that close to a photogrammetric number fails if the measurement is off, if the tolerance stacks the wrong way, or if the board is handed the other way round. Instead the head has <b>one 32 × 36.8 opening</b> straight through the 9&nbsp;mm plate: connectors, heatsink and both cables all pass rearward through it with <b>≥5.2&nbsp;mm of side clearance and ≥1.3&nbsp;mm top and bottom</b>. The bridge and the old 12 × 7 cable slot are deleted, and the clamp's escape notch with them.</li>
+      <li><b>No screws, no heat-set inserts, anywhere.</b> All four M3 inserts and eight screws are deleted. The keel has two tabs that slide under two hooks on the puck and click over a detent; the camera board slides straight into a three-sided tray from the front — the channel lips used to run its full height and leave a 32.2&nbsp;mm gap for a 37&nbsp;mm board, so they have moved <b>above</b> the board's top edge and nothing overhangs its path — and it is held by a 2.5&nbsp;mm <b>staple</b> \u2014 two arms and a top bridge, open at the bottom \u2014 that drops down two channels and snaps past two lips. A closed ring could never be slid onto a lens standing 26&nbsp;mm proud of the board, and nor could a yoke open at the top: whatever sits below the hole has to travel through the barrel. Only a part with nothing below the barrel makes the trip. Bill of materials: three zip ties and one drop of glue for the visor.</li>
+      <li><b>How the Ø24 lens is guaranteed to fit — three separate checks.</b> <b>(1) Inside the egg:</b> every part of the sub-assembly is measured as a <b>radius about the body axis</b> and must be ≤ r50. <b>(2) Rotation:</b> because that test is a radius and not a footprint, anything that passes it also sweeps freely through the 18° twist — there is no orientation in which it is wider. <b>(3) Through the aperture:</b> the visor's hole is a <b>29.2 × 26.4 capsule</b>, sized off the Ø17 optic and the 100° field, not off the barrel. Measured honestly the glass sits <b>8.8&nbsp;mm</b> back from the tile's face (11.6 at its lower rim), so the field itself is well clear — at the worst rim it needs 22.1 × 16.6, and it has 4.9&nbsp;mm of margin — but the full Ø17 pupil would want 39.1 × 33.6, which no hole in a 33&nbsp;mm tile can give. The corners therefore lose light rather than image: ray-traced pupil throughput at the 100° corners is <b>63% bottom, 91% top — about 0.7&nbsp;EV</b>, on the order of a wide lens's own falloff. Live margins: <b>3.9&nbsp;mm</b> inside the bore radius, <b>0.9&nbsp;mm</b> between the staple's arms and the Ø26 holder over the whole slide, and <b>0.2&nbsp;mm</b> between the visor's sleeve and that holder top and bottom — the audit prints the first two under “camera fit”, so a lens change that breaks one cannot pass silently. The 0.2 is against the Ø26 <i>envelope</i>: a knurled focus ring wider than Ø26 fouls the sleeve.</li>
+      <li><b>Rack the focus IN before insertion.</b> The lens is <b>26&nbsp;mm long with a Ø24 barrel and a Ø17 clear aperture</b>, and it sits 8.8&nbsp;mm behind the visor's hole. Racked fully OUT the barrel reaches <b>r47.4 at z166 — 2.6&nbsp;mm inside</b> the r50 bore, so it passes the bore either way; but the bore is not the constraint. A swept-volume check of the 18° twist finds <b>7.5&nbsp;mm³</b> of the racked-out barrel against the shell's thickened eye pad (x −22…−8.9, z 181.5–185.2), because the shell's inner radius there is 49.0, not 50. Racked in, the tip sits 1.5&nbsp;mm further back and the twist is clear. The focus travel is still modelled as its own volume and the audit still prints its radius: if the lens ever gets longer, the “rack it in” step comes back automatically instead of being discovered on the bench.</li>
+    </ul>
+    <h4>v3 — the kit is 103 × 90 × 35</h4>
+    <ul>
+      <li><b>The board could not go in, and could not have fitted anyway.</b> I had been building to NVIDIA's bare 100 × 79 × 21. At 103 × 90 × 35 the kit standing on edge presents a 90 × 35 cross-section — a half-diagonal of <b>48.3&nbsp;mm</b> (the cradle and the audit are still built to 90.5, deliberately: build to the larger number) — so it needs a Ø100 bore, against the Ø82.8 it had; and the Ø110 egg only cleared r48.5 between z58 and z156, a 97&nbsp;mm band for a part that stands 103 tall.</li>
+      <li><b>The egg is Ø130.</b> Same profile family, same 190&nbsp;mm height, 18% fuller: rim r53.75, <b>Ø100 bore</b> (2–3&nbsp;mm around the kit at every height it occupies), and a 2.4&nbsp;mm flat rim to stand on. Silhouette, vents, twist-lock, hat, badge and antenna port all carried over and rescaled.</li>
+      <li><b>The keel opened up with it:</b> 36.4&nbsp;mm shoe interior for the 35&nbsp;mm kit, a 92&nbsp;mm back plate, the end lip at y-46.6, and the whole cradle still hard-clipped to Ø99 so it cannot exceed the hole it passes through.</li>
+      <li><b>The eye is solved, not hardcoded.</b> The face of a fatter egg is further out, so the eye's centre, its depth under the skin and every pocket/tile scale factor are now derived from the profile at runtime. The camera stack sits 5&nbsp;mm back down the eye axis to stay inside the bore, and the aperture opened to Ø19 to keep the view clear.</li>
+    </ul>
+    <h4>Whimsy</h4>
+    <ul>
+      <li><b>The antenna leans.</b> Its bayonet port sits 8&nbsp;mm off the axis, so the stem comes out of the dome's shoulder rather than its apex — and the crown itself stays a closed, uninterrupted dome. Quarter-turn in, straight out for travel.</li>
+    </ul>
+    <h4>The body</h4>
+    <ul>
+      <li><b>No arms.</b> The flanks are clean again — both shoulder pads and their Ø4.3 bores are gone, and the three gills per side are back to full length.</li>
+      <li><b>No legs.</b> The egg sits flat on the desk on its own 2.4&nbsp;mm rim; the charcoal keel's base disc is hidden up inside the bottom opening.</li>
+      <li><b>Crown.</b> The dome is closed — no flat, no port through the apex. The bayonet socket is 8&nbsp;mm off the axis, so the Ø6.6 bore opens as an ellipse in the dome's shoulder and the antenna leans out of it. Putting it on the axis meant truncating the crown at z225 to a Ø12.5 flat, which is a hole in the top of the egg that only a hat can hide.</li>
+      <li><b>Eye.</b> A charcoal capsule visor — 63&nbsp;mm nominal across the face, a 56 × 33&nbsp;mm part, set into a 2.4&nbsp;mm pocket, its outer face 0.3&nbsp;mm under the skin so it can never stand proud. It is FLUSH to the pocket wall bar 0.2&nbsp;mm of glue clearance — the shadow line is the recess, not a groove. Behind the aperture the tile carries a <b>capsule sleeve</b> — the 29.2 × 26.4 aperture plus a 1.0&nbsp;mm wall, merged into the tile's own outer surface and running back to s−17 — and the shell's bore is a matching capsule 0.3&nbsp;mm clear of it. The tunnel is charcoal end to end: reaching the white step needs a ray 53.6° off axis, by which angle the tile's own rim occludes first. No lit internals and no white shell visible through the eye, from any angle. Gaze is 8.6° up.</li>
+      <li><b>Why the rim is clean now.</b> Three separate faults, each hiding the next. The pocket cutter was bounded by the same revolve the shell's own skin comes from, so the cut arrived carrying a face coincident with the face it was cutting. The outer profile was sampled every 2.5&nbsp;mm, and a cut THROUGH a surface exposes its polyline where shading normally hides it — 0.79&nbsp;mm now, in 256 steps. And the last of it was not solid at all: three.js was averaging one normal across a 60° corner at the rim, and because a revolve alternates which rim vertices carry a wall triangle, the blend alternated too and lit up as a comb of teeth. Normals come from Manifold with a 40° sharp-edge threshold. The exported mesh was always watertight.</li>
+    </ul>
+    <h4>Airflow</h4>
+    <ul>
+      <li><b>Intake:</b> 3 slots per side low on the waist (z≈64) — the bottom is sealed by the desk.</li>
+      <li><b>Mid + exhaust:</b> 3 gills per side at z≈128, 3 slots high on the rear behind the dome. Both side rows now share one set of angles (±14° off the flank), so they stack into three clean columns instead of a 14° row over an 18° one. Fan → side plenum → chimney.</li>
+    </ul>
+    <h4>Hardware review — what it fixed</h4>
+    <ul>
+      <li><b>The top of the sub-assembly would not go through the hole.</b> Everything is lowered up through the Ø82.8 bore, so nothing may exceed r41.4 about the body axis — but the camera's lens barrel reached r42.15 at z170. The whole camera stack (keel head, plate, standoffs, board, lens, heatsink pocket) now sits 2&nbsp;mm further back down the eye axis: widest point r40.2, and the lens is still inside the visor's light-tight collar, so the view is unchanged. The audit measures this on every part now, so it cannot come back.</li>
+      <li><b>The bottom opening.</b> Ø100 bore, r53.75 rim: 2&nbsp;mm around the kit's 48.5&nbsp;mm half-diagonal, and the keel is hard-clipped to Ø99 so nothing can exceed the hole it passes through.</li>
+      <li><b>Kit clearance:</b> 36.4&nbsp;mm shoe for a 35&nbsp;mm kit, 92&nbsp;mm between the two end webs for a 90&nbsp;mm kit. It stood at z40.4 from v4 through v5.4 \u2014 the puck's pocket floor, then the keel's pan, then the merged bay floor, always the same plane. <b>v5.5 raises it to z43.5 on four crush pads</b> so it presses into the camera head: the first deliberate move of that seat, and the only thing that moves with it is the kit.</li>
+      <li><b>Turn slot was blind.</b> The flat 22&nbsp;mm cube only reached the bore at its centre, so the lug jammed 2&nbsp;mm in; it is a swept arc now, and the twist is 18° (13° never pushed the lug clear of its 9&nbsp;mm entry channel).</li>
+      <li><b>Lock wall.</b> The old slots left a 0.6&nbsp;mm skin on the outside of a 2&nbsp;mm rim. Now 2&nbsp;mm of skin outside a 4&nbsp;mm band.</li>
+      <li><b>Inserts and screws: gone</b> (v4). Two tabs run in a channel through the puck's own land and click over a detent; a snap-in clamp holds the board. Nothing to melt in, nothing to strip.</li>
+      <li><b>Camera:</b> 37 × 37 board, <b>1.4–1.8&nbsp;mm thick</b> (1.6 nominal), <b>slid in from the front along the eye axis</b> into a 38.0&nbsp;mm pocket, landing on a tapered ledge and held flat by a snap-in clamp — no standoffs, no hole grid to match, so it fits any 37&nbsp;mm module of this family. It is <b>not</b> a drop-in-from-above tray: the heatsink and both cables are on the back face and would have to pass through 9&nbsp;mm of head plate.</li>
+      <li><b>Feet.</b> The rim is 2.4&nbsp;mm and chamfered 0.6 — a Ø106 ring of first layer; it stands on itself; add a felt ring if it must not slide.</li>
+    </ul>
+    <h4>Cables — there are only two</h4>
+    <ul>
+      <li><b>Power (Ø7).</b> Barrel plug onto the kit's rear face, then straight out the rear arch. Two things were in its way: the shoe's rear end lip (deleted — the front lip and the press fit locate the kit) and the floor puck, which blocked the arch down to z48. The disc now has a 22&nbsp;mm scallop at the arch. <b>v5.5: the lead leaves ~7&nbsp;mm above the desk, not ~4</b> — the kit rose 3.1&nbsp;mm for the press fit and its power socket rose with it. The rim slot is open through the rim, so the cable still turns down and lies flat.</li>
+      <li><b>Camera cables.</b> Both plug into the back of the board and leave <b>straight back</b> through the head's opening — nothing to thread, nothing to align — then outboard of the keel tongue and down the +x flank to the kit's CSI header. One tie slot in the shoe's front wall takes the strain.</li>
+      <li>Both are modelled as swept volumes and included in the clearance audit, so they cannot silently be designed out again.</li>
+    </ul>
+    <h4>Camera heatsink</h4>
+    <ul>
+      <li>26&nbsp;mm sink at the back of the board, hanging through the head's <b>one 32 × 33.0 opening</b> (the same opening the connectors and cables use — a 30 × 30 sink passes with 1.0 at the sides and 1.5 top and bottom) into the keel's own chimney, so the three rear exhaust slots draw across it rather than past a sealed box. The blind pocket is gone.</li>
+      <li>It also means the seat plane is the head's own face — the board is supported at its rim by the tray, not floated on standoffs over a cavity.</li>
+    </ul>
+    <h4>Parts / plates (P1S, no AMS)</h4>
+    <ul>
+      <li><b>White plate:</b> body shell, rim-down, no supports. Brim it — 190&nbsp;mm tall on a 2.4&nbsp;mm-wide rim.</li>
+      <li><b>Charcoal plate:</b> keel cradle (<b>upright on its own base disc</b> — v5.4 merged the floor puck into it, so the first layer is the Ø99 disc, ~7500&nbsp;mm², and every wall above it is vertical or knifed), camera clamp (flat, <b>pads UP</b> — the 2.8&nbsp;mm plate face goes on the bed; pads down leaves 212&nbsp;mm² of plate 0.6&nbsp;mm in the air), eye visor (<b>face-up</b>), antenna (upright).</li>
+      <li><b>Red plate:</b> the antenna's ball tip, flat-side-DOWN — a Ø7.1&nbsp;mm first layer with a Ø4.15 hole in it, no supports. One part, a couple of minutes; it is the only red on the robot.</li>
+      <li><b>Brim</b> the visor, the antenna and the <b>keel</b> — visor and antenna land on <b>81 and 26&nbsp;mm²</b> (measured off the built solids), and the keel now lands its whole <b>base disc</b> — <b>~7500&nbsp;mm²</b> (v5's pan was 4097; v4's narrow strips, 754). Brim it anyway: it is <b>159.6&nbsp;mm tall</b> and its mass leans forward over the camera head — though the disc reaches 28&nbsp;mm forward of the old pan edge, so it is far less of a lever than it was.</li>
+      <li><b>Supports: one patch, one part — the keel.</b> The underside of the camera head — <b>279&nbsp;mm² at print z108</b> (x −14…25, y −20…−11), the 9&nbsp;mm-thick plate's bottom edge. The rear underside is knifed off at 55° in the printer's frame, but the front cannot be: the space under the head is where the dev kit's top 25&nbsp;mm lives, so there is nowhere to put a gusset. It is not a skim patch either — it is the foundation of the window's +x pillar, 7 × 15&nbsp;mm in section and <b>free-standing for 40&nbsp;mm</b> until it rejoins the keel at z143.5. Use a dense support interface. The roof of the <b>32 × 33.0</b> connector window is <em>not</em> a support patch: it is a 32&nbsp;mm bridge anchored both sides. But it is tilted 8.6°, and slicers often miss sloped bridges and print them as overhang — check the preview, and if it is flagged, support that roof too. Droop there eats into J2's top clearance, which is <b>1.8&nbsp;mm</b> — the roof is relieved 1.0&nbsp;mm over J2 (dx ±9.1) for exactly this reason. The 2.75&nbsp;mm this line used to quote was the old 36.8&nbsp;mm window's number; at 33.0 with no relief it was 0.8. The audit computes and prints every connector's clearance now, so it cannot go stale again. Both areas are buried inside the body and never seen. Every other part, including the <b>shell</b>, prints support-free.</li>
+      <li><b>Why the keel stands up:</b> laid on its back it rested on one corner of the camera head — 34&nbsp;mm² of first layer and 8400&nbsp;mm² of the plate hanging 6.5&nbsp;mm in mid-air. Upright it starts on the base disc's ~7500&nbsp;mm², and the brim is for the leaning mass, not the area.</li>
+      <li><b>Why the visor is face-up:</b> it is a curved tile, so either way it lands on a line. Face-up puts the drooping side on the glue face and the good surface — the robot's face — on top.</li>
+    </ul>
+    <h4>Settings</h4>
+    <ul>
+      <li>PLA, 0.2&nbsp;mm layers, 0.4&nbsp;mm nozzle, 3 walls, 15% infill. Supports only on the keel's z108 head-underside patch (dense interface); brim the shell, the keel, the visor, the antenna and the badge.</li>
+      <li><b>No per-part overrides — every part prints on the same profile.</b> The one that used to need one is the visor: its sleeve behind the aperture was a <b>0.70&nbsp;mm</b> wall over the 11&nbsp;mm the lens holder occupies, which is one 0.4&nbsp;mm line plus gap fill, so it carried a “print <code>l6b1_eye_visor</code> at 0.35&nbsp;mm line width, 2 walls” override — unapplicable the moment the visor arrives as one object among eight in an imported 3MF. The relief behind s-6 is <b>0.2&nbsp;mm</b> instead of 0.3 now, so the wall is <b>0.80&nbsp;mm = 2 × 0.40</b> at the default line width. It is paid for out of clearance that was never as tight as the old note claimed: the built gap over the Ø26 holder measured <b>0.50&nbsp;mm</b>, not the 0.19 the text carried, and it is <b>0.40&nbsp;mm</b> now (0.25 with the keel at the far end of its ±0.15&nbsp;mm du float). The audit measures the wall and the gap off the built solid every run.</li>
+    </ul>
+    <h4>Hardware</h4>
+    <ul>
+      <li><b>No screws and no heat-set inserts.</b> <b>One</b> zip tie and a drop of glue for the visor — that is the whole bill of materials. <b>The kit's two structural ties are gone</b> (v5.5: it is a press fit — crush pads below, head plate above); the one tie left is strain relief on the camera flex. <b>Keel→puck no longer exists</b> (v5.4: one part), board→keel is a snap-in clamp, the antenna is a bayonet, the hat is a clearance socket that drops over the crown (0.15&nbsp;mm at its rim, 0.30 above z207 — no stem, no catch), and shell→keel is the twist-lock.</li>
+    </ul>
+    <h4>Assembly</h4>
+    <p class="mut">The order matters. Three steps used to be in the wrong place, each of them provably impossible: the visor cannot go in before the sub-assembly, the barrel plug cannot go on before the twist, and the focus cannot be racked out during it. All three were caught by sweeping the motions as volumes, not by looking at the assembled state.</p>
+    <ol>
+      <li><b>v5.4: there is no step 1 any more.</b> The keel arrives with its floor on it — no slot to line up, no tabs to cam over a detent, nothing to pull-test. Start with the dev kit.</li>
+      <li>Stand the dev kit on edge in the keel's bay, ports toward the rear arch, power end down. <b>It goes in ANGLED — one end down first, then swing the other end down</b>; it cannot be lowered in flat, and it never could (swept straight up it hits 3936&nbsp;mm³ of camera head). <b>Then press it home:</b> it is a press fit now — four crush pads under it, the camera head's underside bearing on a 35&nbsp;mm line across its top at y&nbsp;−11.5. Firm and square, and it stays put with no ties. The two end webs, rooted in the base, stop it lengthwise. <b>Leave the barrel plug off</b> — it does not clear the shell at the insertion angle (step 4).</li>
+      <li><b>Camera — it goes in from the FRONT, along the eye axis.</b> Feed both camera cables back through the head's 32 × 33 opening first, then slide the board straight back into the tray: heatsink and connectors into the opening, lens forward, board bottom landing on the tapered ledge (0.1&nbsp;mm of drop, 0.5&nbsp;mm of side play). <b>It stops when its back face lands on the seat frame</b> — the ring of head plate around the opening, 2.5&nbsp;mm down each side and 2.0 top and bottom. There is no path from above: the heatsink and the cables stand off the back face and the head plate is 9&nbsp;mm of solid material either side of the window. Nothing retains it until the clamp lands, so hold it with a finger. <b>Then the clamp:</b> lens through its open bottom, arms down the two channels, push until both barbs click into the rail pockets (~4&nbsp;N, one audible click each). Its two 2&nbsp;mm pads land on the board's outer border, directly over the seat strips behind it — the plate itself never touches the board. One zip tie on the flex at the shoe.</li>
+      <li><b>Rack the focus fully IN.</b> Racked out, the barrel fouls the shell's eye pad during the twist in step 5 (7.5&nbsp;mm³, at z181.5–185.2). Racked in it is clear. You will set the focus properly in step 7.</li>
+      <li>Stand the shell rim-up and lower the whole sub-assembly in through the bottom: the keel's three lugs drop down the entry channels, then twist 18° — <b>to the mark, not “until it stops”</b>, since the lock free-runs ~1.9° past its position. Lug spacing is uneven — it only locks eye-forward.</li>
+      <li>Now fit the barrel plug, reaching in through the Ø100 bore, and lay the lead out through the rear slot. <b>v5.3: the slot is open all the way down through the rim</b>, so the cable leaves at desk level and lies flat instead of being led over the 4&nbsp;mm ring that used to close the arch.</li>
+      <li>Reach in through the bottom and set the focus, out to as far as 27.5&nbsp;mm. Racked out it stays inside r50, so nothing has to come apart to do this.</li>
+      <li><b>Glue the visor in last.</b> Press it straight into the eye pocket <b>along the eye axis</b> — its sleeve slides down over the lens holder with 0.2&nbsp;mm top and bottom, and that is the only direction that works: the sleeve captures the holder, so there is no path that fits the visor first and then lifts the sub-assembly past it (312–363&nbsp;mm³ of overlap on every route tried). It follows that the bond has to be broken to get the sub-assembly out again — see Service.</li>
+      <li>Antenna: drop it into the crown port and quarter-turn. It pulls straight out for travel — the body then packs as a plain egg.</li>
+      <li><b>Ball tip onto the antenna:</b> press the red sphere down over the stem's Ø4 pin until its flat underside lands on the shoulder at z24.5 — 0.15&nbsp;mm of fit over 4&nbsp;mm of engagement. Friction only; if your printer runs tight, ream the socket rather than force the ball.</li>
+      <li><b>Crown fitting: the antenna.</b> Its bayonet port sits 8&nbsp;mm off the axis, so the stem leans out of the dome's shoulder and the crown itself stays a closed dome. Quarter-turn in, straight out for travel.</li>
+    </ol>
+    <h4>Service</h4>
+    <ul>
+      <li><b>The visor is the one destructive step.</b> Its sleeve sits over the lens holder, so the sub-assembly cannot come out until the tile is prised out of its pocket and the glue bond broken. Use one drop, at the pocket wall, not on the sleeve — and expect to reprint the visor if you ever open the robot. Everything downstream of it is tool-free.</li>
+      <li>Break the visor bond, then twist the shell off; rack the focus in; the sub-assembly lifts out through the Ø100 bore. <b>The Jetson tilts out</b> — lift one end to break the press fit, then swing it clear; it will not come out flat.</li>
+      <li>The camera board comes out by prying the clamp up at its notch — the notch is mid-bridge and the barbs are 18&nbsp;mm out at the arms' free ends, so the middle lifts first and the two barbs cam out of their pockets on their 34° release ramps. Firm, two hands, no tool sharper than a screwdriver. The board then slides straight out along the eye axis.</li>
+      <li>Nothing else comes apart, and nothing else needs to: the keel <em>is</em> the floor now, so the last teardown step is tilting the Jetson out. Nothing but the visor is glued, and there is no fastener to lose.</li>
+    </ul>
+    <h4>Fit notes</h4>
+    <ul>
+      <li>The audit intersects every part pairwise (+ Jetson / plug / camera / cable ghost volumes) — all must be zero <b>except <code>keel ∩ jetson</code>, which carries a 20&nbsp;mm³ press-fit budget (v5.5) and is reported as an intended interference</b>. It also checks that every part of the sub-assembly fits inside the Ø100 bore it has to pass through, and slices each part in its print orientation to catch empty layers, loose bodies, first-layer area, and any region a layer below does not support — telling bridges apart from cantilevers, and naming where the worst one is. It yields between parts, so it reports progressively instead of freezing the page.</li>
+      <li><b>What the audit does not check.</b> Its overhang scan is <b>sampled</b> — 80 probes, so ~1.9&nbsp;mm apart on the keel — and it misses any patch shorter than that. Clearances are otherwise reported for the <b>assembled state</b>, with three exceptions that are now swept or tested as volumes on every run: the board's slide-in along the eye axis, the clamp's drop down its channel, and a 1.1&nbsp;mm-tall envelope over the board's whole front face (everything except the outer 2&nbsp;mm border and the holder) against the clamp — that last one is what proves the plate bridges the components rather than pressing them. The other three motion faults (visor before sub-assembly, plug before twist, focus racked out during it) were found the same way by hand — re-sweep if you move anything.</li></li>
+      <li><b>Two hard limits on the camera module — check them with calipers before you commit.</b> <b>(1) The barrel may project at most 27.0&nbsp;mm from the board's front face racked fully IN</b> (nominal 26). At 27.5 the racked-in barrel fouls the shell's eye pad during the insertion twist (6.8&nbsp;mm³ at z181.5–185.2) and the sub-assembly cannot be turned into its lock. The r50 bore is not the limit — that is 29.8&nbsp;mm — and the barrel can never touch the visor, since Ø24.6 passes straight through a 29.2 × 26.4 hole. <b>(2) Nothing over the barrel may exceed Ø26.3</b> — a knurled focus ring, a locking screw or a retaining nut wider than that fouls the visor's sleeve, which is the last part fitted and is glued. The staple is not the stop; it admits Ø29.0.</li>
+      <li><b>The clamp, and what actually holds the board.</b> Front-loaded, the board is <b>pinched between two things</b>: behind it, the <b>seat frame</b> — the ring of head plate around the connector window, 2.5&nbsp;mm down each side, 2.0 top and bottom (the window was 36.8 tall, which left 0.1&nbsp;mm of seat at top and bottom; it is 33.0 now, with a local 23&nbsp;mm notch for J1's 4-pin, which reaches 0.6&nbsp;mm lower). In front of it, the <b>clamp</b> — the flat charcoal staple, sliding down the two channels in the tray walls after the board is in, never before and never into the board's own 1.5&nbsp;mm. Rails take the sides, the ledge the bottom, the lips the top. The clamp touches the board <b>only on two 2.0&nbsp;mm pads at dx 16.4–18.4</b>, aligned with the seat strips behind, in the outer 2&nbsp;mm border where no module of this family puts a component; the 2.8&nbsp;mm plate itself stands <b>1.3&nbsp;mm clear</b> of the front face (1.1 on a thick board) on those pads, so it bridges over anything soldered inboard instead of sitting on it. Retention is two sprung barbs on the clamp's own arms dropping into pockets in the rail faces: 0.6&nbsp;mm of deflection, ~4&nbsp;N, one click each. The channel is 5.9&nbsp;mm deep to take board 1.4–1.8 + pads 1.6 + plate 2.8 + 0.2 float.</li>
+      <li>Cables exit through the rear slot, which is open through the rim — the lead turns down and lies flat on the desk (it leaves the socket ~7&nbsp;mm up since v5.5). It costs 16&nbsp;mm of the rim's ~338&nbsp;mm circumference: first layer 755&nbsp;mm², down from 796, and the shell stands on the rest. The audit checks that everything on the sub-assembly stays inside the Ø100 bore.</li>      <li><b>Prefer the 3MF.</b> It carries millimetres and real topology.</li>
+      <li><b>Ghosts travel with their datum (v5.5).</b> The power plug and the Ø7 lead were z literals, written when the kit's seat was frozen at 40.4. Raising the kit 3.1&nbsp;mm moved its socket and left both ghosts behind, so <code>keel∩plugs</code>, <code>shell∩plugs</code>, <code>keel∩cable</code> and <code>shell∩cable</code> were all still reporting green — evaluated 3.1&nbsp;mm below where the hardware now is. <b>§7.15 in its nastiest shape yet:</b> not a pair missing from the matrix, but a pair <em>in</em> the matrix evaluated in the wrong place. It reads identically either way, and it would have kept lying the moment the bench retunes <code>KIT_LIFT</code> — which the audit itself tells them to do. <b>All three</b> kit-referenced ghosts are derived off <code>KIT_Z0</code> now — the camera flex's CSI-header end was missed on the first sweep, one comment away from the two that were fixed, which is the rule earning a second hearing. The doorway was re-sized off the moved ghost too (z36–60: the plug's top had gone 1.5&nbsp;mm above the old roof).</li>
+    </ul>
+    <p class="mut">Ø130 body, 190&nbsp;mm tall (≈207 with the antenna), sitting flat on its rim. Solids built with Manifold — booleans watertight by construction.</p>
+  </details>
+</div>
+<script src="three-d-stage.js"></script>
+<script type="module">
+import ManifoldModule from 'manifold-3d';
+import { zipSync, strToU8 } from 'fflate';
+
+const stage = document.querySelector('three-d-stage');
+const { THREE } = await stage.ready;
+const wasm = await ManifoldModule({
+  locateFile: (f) => 'https://unpkg.com/manifold-3d@3.2.1/' + f,
+});
+wasm.setup();
+const { Manifold } = wasm;
+
+// ============================================================================
+// PRINT SPACE: +Z up, millimetres. Every part authored in ASSEMBLED world
+// position (desk at z0); forPrint() lays each on the bed.
+// ============================================================================
+const D = r => r * 180 / Math.PI;
+const cube = (w, d, h, x = 0, y = 0, z = 0) => Manifold.cube([w, d, h], true).translate([x, y, z]);
+const cyl = (r, h, x = 0, y = 0, z = 0, seg = 64) => Manifold.cylinder(h, r, r, seg, true).translate([x, y, z]);
+const atR = (m, R, aDeg) => {
+  const t = aDeg * Math.PI / 180;
+  return m.rotate([0, 0, aDeg]).translate([R * Math.sin(t), -R * Math.cos(t), 0]);
+};
+
+// uneven → keys one orientation. 330 → 305 in v4: at 330+18° that lug's root was inside
+// the puck's kit pocket. 90 → 115 in v5, because the puck's top face became a full-width slot
+// the keel's pan slid along, so no lug could sit inside x -21.9..21.0 (the slot) or across
+// x -27.7..-20.7 (the tab channel), and at 90+18° it sat in both.
+// v5.4: the slot and the channel are BOTH GONE — the keel and the floor are one part, so
+// there is nothing for a lug to sit inside any more, and that constraint is retired. The
+// angles stay where they are on purpose: 100/90/170° is unique under rotation, which is what
+// keys the insertion orientation, and the 115° entry channel also stays clear of the rear
+// cable slot — which since v5.3 is open through the rim, so a lug near it would have no rim
+// under it at all. Unequal spacing is the reason now; the voids no longer are.
+const LUGS = [115, 215, 305];
+const TILT = 0.15;             // eye gaze, radians up
+// The whole sub-assembly is lowered UP through the shell's Ø82.8 bottom bore, so
+// nothing on it may exceed r41.4 about the body axis. The camera stack broke that:
+// the lens barrel's lower front rim reached r42.15 (at z170) — the top of the board
+// was wider than the hole it had to pass through. CB pushes the entire camera stack
+// (keel head, plate, standoffs, board, lens, heatsink pocket) 2 mm further back down
+// the eye axis, which brings that rim to r40.2. The lens front lands at s-3, still
+// well inside the visor's light-tight collar (which runs s+6 → s-8), so nothing is
+// vignetted and no other clearance changes.
+// v4: CB is gone. The camera stack is derived from the module's real numbers.
+
+// ============ CAMERA MODULE — the five numbers everything else follows ============
+// 37 × 37 board. The lens is a focus barrel whose FRONT FACE lives between 21 and
+// 31 mm out from the board's front face, so the board has to sit ~33 mm behind the
+// skin — which is exactly where the dev kit's top corner used to be. That is what
+// forced the kit down onto the floor puck (see KIT_Z0).
+// v4.1: the connectors are MEASURED now (datum = board's top-left corner, X right,
+// Y down, ±0.15 mm), and there are two of them, both on the BACK face — J2's block
+// crosses the board's centreline, where the Ø26 lens holder lives, so it cannot be
+// on the lens side. Neither gets a frame: a shaped pocket per connector is a bet on
+// 0.15 mm of photogrammetry AND on which way round the board is handed. One big
+// opening through the head is the same part with none of the risk.
+const BOARD = 37, BOARD_T = 1.6;
+// Measured lens, and the two diameters are NOT the same number — which is the whole
+// point. Ø24 is the barrel: a mechanical envelope that has to pass holes and clear
+// walls. Ø17 is the clear aperture: the only number the visor's hole owes anything
+// to. Sizing the visor hole off the barrel (Ø26) is what forced the eye to grow;
+// sizing it off the optic puts it back to Ø20 in the original 25 mm-tall capsule,
+// and the barrel is shrouded BEHIND the tile instead of poking through it.
+const FOV_DEG = 100;                 // measured diagonal field of view
+const LENS_D = 24;                   // barrel OD
+const APER_D = 17;                   // clear optical aperture
+const LENS_LEN = 26;                 // front face, out from the board's front face
+const FOCUS_T = 1.5;                 // screw-focus allowance beyond that
+const LENS_0 = LENS_LEN, LENS_1 = LENS_LEN + FOCUS_T;
+const LENS_BR = LENS_D / 2 + 0.3;    // Ø24.6 modelled barrel — 0.3 print/measure slop
+const HOLDER_R = LENS_D / 2 + 1.0;   // Ø26 envelope over the barrel's full length
+const RING_R = HOLDER_R + 1.5;       // clamp ring: Ø29 over a Ø26 holder, board still snug
+const SHROUD_R = HOLDER_R + 1.4;     // Ø28.8 light shroud — 0.4 clear of the Ø26 holder
+// How deep the barrel sits behind the aperture plane. It is a THREE-way trade: too
+// shallow and the board's own corners swing out past the Ø100 bore (at -2 the stack
+// reached r49.9 — 0.1 mm of margin); too deep and the tile's rim starts to clip the
+// field of view. -6 keeps ≥2 mm of bore margin and still leaves the rim outside a
+// ~74° cone from the Ø17 optic.
+const TIP_S = -6;
+const S_BF = TIP_S - LENS_1;         // board front face   s = -33
+const S_BB = S_BF - BOARD_T;         // board back = the seat plane   s = -34.6
+const HEAD_T = 9;                    // keel head plate thickness
+const S_HEAD = S_BB - HEAD_T / 2;
+// v5.1 — the tray was built to nominal and nothing else. 37.4 mm across a 37 mm board is
+// 0.2/side, and the board landed on the ledge with 0.05; a real board (37 ± 0.2, 1.4–1.8
+// thick) in a real print (±0.15 on a gap) simply does not go in. Every number here is now
+// sized to the RANGE, not the nominal: 38.0 pocket (0.5/side), 4.9 mm channel, and a clamp
+// that takes up 1.4–1.8 mm of board thickness on sprung pads instead of a 0.1 mm "preload".
+const PRESS_FIT_BUDGET = 20;         // mm³ of INTENDED keel∩kit interference — the v5.5 press
+                                     // fit (see KIT_LIFT). A press fit IS an interference, so
+                                     // "every pair zero" would either fail or have to be
+                                     // silently exempted; §7.15 says budget it and name it.
+                                     // Both the clash matrix and the kit's own seating check
+                                     // measure against this one number.
+                                     // Both the clash matrix and the slide-in sweep measure
+                                     // against this one number: a press fit is an
+                                     // interference by definition, so "all pairs zero" would
+                                     // either fail or have to be silently exempted — §7.15
+                                     // says budget it and name it instead.
+const RAIL_H = 7.6;                  // tray walls proud of the seat: 5.9 mm channel under a
+                                     // 1.7 mm lip — board 1.4–1.8, then the clamp standing
+                                     // 1.3 mm OFF the board's face on 1.6 mm pads (2.8 plate
+                                     // + 1.6 pads + 1.3 board + 0.2 float)
+// Measured envelopes, board coords, then MIRRORED in dx so the opening is valid
+// whichever handedness the photo was:  J2 |dx| ≤ 8.4, du 4.4..15.7 (14.0 × 10.3 body)
+//                                     J1 |dx| ≤ 10.8, du -17.1..-11.6 (7.3 × 3.6)
+const CONNS = [
+  { id: 'J2_block', dx: 8.4, du0: 4.4, du1: 15.7, out: 9 },
+  { id: 'J1_4pin', dx: 10.8, du0: -17.1, du1: -11.6, out: 6 },
+];
+// The one opening: 32 × 36.8 through the 9 mm head plate. It clears every connector
+// by ≥ 5.2 mm sideways and ≥ 1.3 mm vertically, and the 26 mm heatsink by 3 mm — so
+// nominal-to-worst-case printer error (±0.4 on a 9 mm-deep hole) cannot touch the
+// board. Width stops at 16.0 because the clamp channel's lip footprint starts at
+// 16.1; height stops 0.1 mm short of the board's bottom edge, where the seat ledge
+// the board actually rests on begins.
+// v5.1: 33.0, not 36.8. At 36.8 the window left the board 0.1 mm of seat at the top and
+// bottom edges — i.e. the only thing behind the board was two 2.5 mm strips down the sides,
+// and "what stops it going in too far" had almost no answer. 33.0 gives a continuous seat
+// frame: 2.5 mm at the sides, 2.0 top and bottom, and still passes a 30 × 30 heatsink with
+// 1.0/1.5 to spare. THE SEAT FRAME IS THE BACK STOP — the board is pinched between it and
+// the clamp's two pads, which are aligned to the side strips on purpose.
+// J1 (du -17.1) is the one thing that does not fit inside 33.0, by 0.6 mm. It gets a LOCAL
+// notch rather than a lower window edge: a 23 mm-wide relief costs 23 mm of the bottom strip
+// and keeps the other 14, where lowering the edge would have cost the whole strip.
+const WIN_W = 32, WIN_H = 33.0;
+// ---- v5.5: THE KIT IS A PRESS FIT, AND THE TAKE-UP COMES FROM BELOW ----
+// Asked for as "the camera frame 1.5 mm thicker at the bottom so the board is a press fit",
+// meaning the Jetson. Measured, the gap over the kit is 2.77 mm, not 1.5 — so 1.5 would have
+// left 1.27 mm of slack and changed nothing. And the ceiling is not the whole head: it is a
+// 16.8 mm band of it at y -21.1..-4.3, z146.15 up. Everywhere else the kit has open sky.
+//
+// The take-up is built UP FROM THE FLOOR, not DOWN FROM THE HEAD, and that is forced by the
+// print, not a preference. The keel prints upright, so the head's underside faces the bed:
+// ANY boss, rib or ridge hung off it starts its first layer in mid-air (§7.5). The bay floor
+// faces the other way — material added there is printed on top of solid disc. Same joint,
+// same 0.33 mm of squeeze, one of the two is printable.
+//
+// So: raise the seat, and let the kit press UP into the head. The reaction is the disc.
+// WHAT IT PRESSES AGAINST, measured rather than assumed (§7.13). The head's underside over
+// the kit is not one surface: y -19..-11 is the head plate's own face, tilted 8.6° by the eye
+// axis (147.27 → 146.15), and only past y -10 does the 55° chamfer take over. A flat pad
+// parallel to the kit's top is not available and never can be — a horizontal face there is a
+// 35 × 19 mm overhang in this orientation, which is exactly why that underside is angled in
+// the first place. So the contact is a LINE across the kit's top at y ≈ -11.5, 35 mm long,
+// widening to a ~2.4 mm band at the working squeeze. That is the right answer, not a
+// consolation: a line does not ask two rigid bodies to be parallel.
+const PAN_T = 1.2;                   // was the keel's floor pan; v5.4 keeps it as the depth
+                                     // the members reach BELOW the bay floor, i.e. the weld
+const PAN_TOP = 40.3;                // the STRUCTURAL datum: where the disc's bay floor was
+                                     // through v5.4, and still where every member's weld is
+                                     // measured from. v5.5 decoupled it from KIT_Z0 — the kit
+                                     // rises, the members do not.
+const PAN_BOT = PAN_TOP - PAN_T;     // 39.1 — where every member's bottom face sits
+const KIT_LIFT = 3.2;                // total rise of the kit's seat above PAN_TOP
+const PAD_H = 0.8;                   // crush pads on the bay floor — the whole compliance
+const BAY_FLOOR = PAN_TOP + KIT_LIFT - PAD_H;   // 42.7: solid disc under the pads
+const KIT_Z0 = PAN_TOP + KIT_LIFT;   // 43.5 — kit bottom, standing on the pad tips.
+                                     // Was 40.4 and unchanged since v4. It moves now, and
+                                     // ONLY the kit moves: PAN_TOP/PAN_BOT are fixed above,
+                                     // so every member still roots at z39.1 into the disc.
+                                     // §6.5 is about the CAMERA stack — nothing above z40.4
+                                     // may move without re-deriving the board and the lens —
+                                     // and the kit is downstream of that stack, not upstream:
+                                     // KIT_Z0 was always derived FROM the camera, never the
+                                     // other way round. Raising it re-derives nothing.
+const KIT_TOP = KIT_Z0 + 103;        // 146.5 against a face at 146.15 → 0.33 mm of squeeze,
+                                     // taken up by the pads crushing 41% of their height
+// v5 — THE KEEL HAS A BOTTOM, and this is the number that makes it free.
+// v4's keel base was four separate members (back plate, front wall, two end webs) that met
+// only where the Ø99 clip had already eaten their corners: 0.13 mm of contact at the plate,
+// 0.03 at the front wall. Connected mesh, invisible to a 0.4 mm nozzle — it printed as four
+// loose parts. There is no fix at that height: the kit's 35 × 90.5 footprint puts its corners
+// at r48.5 and the bore allows r49.5, so ANY closed loop around the kit has 0.98 mm minus
+// clearance to pass through. The tie must go UNDER the kit, and the only material under the
+// kit was the puck's pocket floor. So the pocket is deleted, the puck's top face drops to
+// PAN_BOT across a full-width slot, and the keel's pan fills it. The kit's seat plane does
+// not move, which is the whole point: nothing above z40.4 changes by a layer. (v5.5 moves
+// the kit's seat deliberately, and only the kit's — see KIT_LIFT above.)
+// half-space knife in the EYE frame: keeps material on the +n side of the plane
+// through (sK,duK), n = (cos t along du, sin t along s). t=45° is the ridge v3 cut;
+// bigger t is a steeper face once the 8.6° eye tilt is taken back out.
+const eyeKnife = (t, sK, duK) => {
+  const r = t * Math.PI / 180;
+  return Manifold.cube([60, 400, 400], true).rotate([eyeRot + t, 0, 0])
+    .translate(at(sK + 200 * Math.sin(r), 0, duK + 200 * Math.cos(r)));
+};
+
+// ============ EGG PROFILE — full-height body, Ø110 × 190, z36..226 ============
+// A was 104.25 → rim r43, a Ø82 outer / Ø81 bore bottom opening. The dev kit's
+// corners sit at r40.87, so the shell's bore cleared them by 0.13 mm and the
+// keel not at all — the thing could not be assembled. A = 115.6 lifts the rim
+// to r45.5: Ø82.8 bore (2 mm around the kit), a 4.1 mm flat rim to stand on,
+// and 2 mm of skin outside the lock slots. Silhouette above z60 is unchanged.
+// v3: the dev kit is 103 × 90.5 × 35, not the bare 100 × 79 × 21 I had. Standing on
+// edge its cross-section is 90.5 × 35 — a half-diagonal of 48.5 mm — so it can only
+// pass a bore of Ø100 or more, and the Ø110 body could not even contain it over the
+// 103 mm it stands. RM 55 → 65 makes the egg Ø130: rim r53.75, a Ø100 bore, and
+// r51+ of interior everywhere the kit stands. Same profile family, same 190 mm
+// height, same silhouette — just 18% fuller.
+const Z0 = 36, LB = 65, LT = 125, RM = 65, A = 115.6;   // bottom ellipse rises 53.75→65 over 65; top egg-taper over 125
+const rl = l => l <= LB
+  ? RM * Math.sqrt(Math.max(1 - ((LB - l) / A) ** 2, 1e-6))
+  : Math.max(RM * Math.pow(1 - Math.pow((l - LB) / LT, 2.5), 0.55), 0.4);
+const rAbs = z => rl(z - Z0);
+// outer profile starts with a 0.6 chamfer so the first layer has no sharp lip
+// The outer profile is sampled every 0.79 mm and revolved in 256 steps, not every
+// 2.5 mm in 192. Everywhere else that is invisible — vertex normals smooth the
+// silhouette — but the eye's rim is a cut THROUGH this surface, so it exposes the
+// polyline directly, and a curve crossing 2.5 mm facets zigzags half a facet
+// either way. That, not the cutter, was the sawtooth.
+const SEG = 256;
+const outerProf = [[rl(0) - 0.6, 0], [rl(0.6), 0.6]];
+for (let i = 1; i <= 240; i++) { const l = 190 * i / 240; outerProf.push([Math.max(rl(l), 0.4), l]); }
+const outerSolid = Manifold.revolve([[...outerProf, [0, 0]]], SEG).translate([0, 0, Z0]);
+// wall 2.6; bottom 10 mm forced to a straight r41.4 band = twist-lock bore,
+// flared to 42.2 at the rim so the sub-assembly self-centres on the way in
+const innerPts = [[50.8, 0], [50.0, 1.2], [50.0, 10], [rl(13) - 2.6, 13]];
+for (let l = 19; l <= 175; l += 6) { const r = rl(l) - 2.6; if (r > 0.5) innerPts.push([r, l]); }
+let shell = Manifold.revolve([[...outerProf, ...innerPts.slice().reverse()]], SEG).translate([0, 0, Z0]);
+const offSolid = d => {   // radial offset of the egg (for the floating wing shells)
+  const p = [];
+  for (let i = 0; i <= 76; i++) { const l = 190 * i / 76; p.push([Math.max(rl(l), 0.4) + d, l]); }
+  return Manifold.revolve([[...p, [0, 0]]], 192).translate([0, 0, Z0]);
+};
+
+// ============ eye frame: axis through eyeC, tilted up ============
+// The eye rides on the skin, so on a fatter egg it has to be solved, not hardcoded:
+// BODY_C is the centre every eye surface is scaled about, hubRot the ray out to the
+// face, HUB_R that ray's length to the skin (bisected against the profile).
+const BODY_C = 131;
+const hubRot = 50;
+const HUB_R = (() => {
+  const s = Math.sin(hubRot * Math.PI / 180), c = Math.cos(hubRot * Math.PI / 180);
+  let lo = 40, hi = 95;
+  for (let i = 0; i < 60; i++) { const t = (lo + hi) / 2; if (s * t <= rAbs(BODY_C + c * t)) lo = t; else hi = t; }
+  return (lo + hi) / 2;
+})();
+const EYE_DEPTH = 3.9;   // eyeC sits this far under the skin
+const eyeC = [
+  0,
+  -Math.sin(hubRot * Math.PI / 180) * (HUB_R - EYE_DEPTH),
+  BODY_C + Math.cos(hubRot * Math.PI / 180) * (HUB_R - EYE_DEPTH),
+];
+const d3 = [0, -Math.cos(TILT), Math.sin(TILT)];
+const u3 = [0, Math.sin(TILT), Math.cos(TILT)];
+const eyeRot = 90 - D(TILT);
+const at = (s, dx = 0, du = 0) => [
+  eyeC[0] + dx,
+  eyeC[1] + d3[1] * s + u3[1] * du,
+  eyeC[2] + d3[2] * s + u3[2] * du,
+];
+const eyeCyl = (r, h, s, seg = 128) =>
+  Manifold.cylinder(h, r, r, seg, true).rotate([eyeRot, 0, 0]).translate(at(s));
+const eyeCap = (r, hh, s, dx = 16, seg = 96) => Manifold.union([
+  Manifold.cylinder(hh, r, r, seg, true).rotate([eyeRot, 0, 0]).translate(at(s, -dx, 0)),
+  Manifold.cylinder(hh, r, r, seg, true).rotate([eyeRot, 0, 0]).translate(at(s, dx, 0)),
+]).hull();
+const eyeBox = (w, h, t, s, dx = 0, du = 0) =>
+  Manifold.cube([w, h, t], true).rotate([eyeRot, 0, 0]).translate(at(s, dx, du));
+// a capsule PRISM down the eye axis: halfW across the face, r vertically
+const eyeCapsule = (halfW, r, t, s) =>
+  Manifold.extrude([capPoly(Math.max(halfW - r, 0.01), r)], t)
+    .translate([0, 0, -t / 2]).rotate([eyeRot, 0, 0]).translate(at(s));
+// the egg, pushed t mm straight back down the EYE axis. offSolid() is a radial
+// offset in the profile plane, so near the eye's lower rim it grazes the skin and
+// a "2.2 mm" pocket was only 0.77 mm deep. Translating the egg along the eye axis
+// instead fixes the bottom rim but breaks the top one: where the skin's normal is
+// perpendicular to that axis, an axial translation slides the surface along
+// ITSELF, so the two copies nearly coincide and the boolean serrates.
+const eyeOff = t => outerSolid.translate([0, -t * d3[1], -t * d3[2]]);
+// What finally works: SCALED copies of the egg about the body's own centre. A
+// uniform scale keeps the mesh topology identical, so the copies never interleave;
+// and because the surface normal near the eye is well aligned with the radius from
+// that centre, the gap is a real 2–3 mm everywhere across the window — no grazing,
+// unlike a radial profile offset (0.77 mm at the bottom rim) or an axial
+// translation (which slides the surface along itself at the top rim).
+const eggS = k => outerSolid.translate([0, 0, -BODY_C]).scale([k, k, k]).translate([0, 0, BODY_C]);
+// The window's SIDE walls emanate from the body's axis (a spotlight cone with a
+// capsule cross-section) rather than running straight down the eye axis, where a
+// cylinder wall lies almost tangent to the egg near the top of the eye.
+// The window cutter used to be a convex hull of two scaled capsules. A hull's
+// lateral triangulation is arbitrary, so its wall was faceted by ~a millimetre —
+// intersected with the egg that produced the sawtooth rim, whatever the floor and
+// the tile did. This is an exact extrusion of the capsule outline instead: clean
+// ruled quads, so the rim is a smooth polygonal curve.
+const capPoly = (dx, r, seg = 96) => {
+  const p = [];
+  for (let i = 0; i <= seg; i++) {
+    const a = -Math.PI / 2 + Math.PI * i / seg;
+    p.push([dx + r * Math.cos(a), r * Math.sin(a)]);
+  }
+  for (let i = 0; i <= seg; i++) {
+    const a = Math.PI / 2 + Math.PI * i / seg;
+    p.push([-dx + r * Math.cos(a), r * Math.sin(a)]);
+  }
+  return p;
+};
+// VISOR SIZE lives here, and it is stated at the surface, not at the base of a
+// cutter: EYE_DX/EYE_R are the capsule's half-length-between-centres and radius
+// in the plane of the skin, so the eye is 2*(DX+R) × 2*R = 63 × 32 mm nominal (a
+// 56 × 33 part once it is trimmed to the egg). The last
+// version quoted "52 × 21" but built the cutter from a base cross-section and a
+// taper, which landed at 41 × 21 — and then a Ø21 lens bore ate the whole 21, so
+// the visor read as a small round lens with a hairline fringe rather than a
+// capsule. inset is an EXACT offset of the capsule (same dx, smaller radius),
+// which is how the pocket wall, the tile and its foot stay a constant distance
+// apart the whole way round instead of pinching at the ends.
+// A Ø26 aperture needs a taller capsule to keep a rim: 63 mm nominal chord, ~56 × 33
+// as a part, 3 mm of charcoal all the way round the hole.
+const EYE_DX = 15.5, EYE_R = 16.0;
+// ...and the cutter is a true CONE radiating from BODY_C — the same point the
+// eggS() copies are scaled about. That is what finally kills the sawtooth rim.
+// Run the window's walls down the EYE axis instead and they lie within ~9° of the
+// egg's own surface along the top and bottom of the capsule; at that grazing
+// angle a 96-facet cutter and a 192-facet revolve cross each other back and forth
+// and the rim comes out as teeth. Radiating from the centre, the walls meet the
+// skin at 60–78° everywhere, and every other boundary in the eye — pocket floor,
+// tile face, foot — is a concentric scaled copy of the same egg. One centre, one
+// family of surfaces, nothing grazing anything.
+// eyeC is the CENTRE of the eye's frame, and it sits 3.9 mm inside the skin — the
+// skin along this ray is 65.8 from the body centre, not 61.55. Getting that wrong
+// is what left the light-tight collar floating 3.5 mm behind the tile (the audit
+// caught it as "2 loose pieces") and put every depth out by 7%.
+const eyeCone = (inset = 0) => {
+  const H = 34, lo = (HUB_R - H / 2) / HUB_R, hi = (HUB_R + H / 2) / HUB_R;
+  return Manifold.extrude(
+    [capPoly(EYE_DX * lo, (EYE_R - inset) * lo)], H, 1, 0, [hi / lo, hi / lo])
+    .translate([0, 0, HUB_R - H / 2]).rotate([hubRot, 0, 0]).translate([0, 0, BODY_C]);
+};
+// depth of each boundary below the skin, as scale factors on the egg: 65.8 mm from
+// the scaling centre, surface normal 27° off that ray → 1 mm ≈ 0.01702 of scale.
+const KS = d => 1 - d * 0.893 / HUB_R;   // depth under the skin, mm → scale on the egg
+const K_FACE = KS(0.30);  // tile's outer face
+const K_FOOT = KS(2.15);  // back of the tile
+const K_FLOOR = KS(2.40); // pocket floor
+// The hole is sized off the BARREL, not the Ø17 optic, on purpose: a hole the size of
+// the glass vignettes as soon as the glass sits behind it, and this one sits 6 mm
+// behind. Ø26 keeps the tile's rim outside the cone; the Ø17 optic is centred in it.
+const LENS_R = LENS_BR + 0.7;   // Ø26.0 — kept as the round reference for the shroud
+// THE APERTURE IS A CAPSULE, and its size is arithmetic, not taste. A Ø17 optic
+// behind the tile needs the hole to cover the field it actually has: 100° DIAGONAL on
+// a 4:3 sensor is 4/5 of that tangent across and 3/5 up-down, so the cone is wider
+// than it is tall — exactly the shape the visor already is. 29.2 × 26.4 fits the 33 mm
+// tile with 3.3 mm of rim; round, it would have to be Ø31.3 to cover the diagonal.
+const tanH = d => Math.tan(d * Math.PI / 360);
+const APER_HW = APER_D / 2 + (-TIP_S) * tanH(FOV_DEG) * 0.8 + 0.4;   // 14.6
+const APER_HH = APER_D / 2 + (-TIP_S) * tanH(FOV_DEG) * 0.6 + 0.4;   // 13.2
+// The sleeve behind the tile is the SAME capsule, +1 mm of wall. It used to be a round
+// Ø28.8/Ø26.8 tube ending at s-1.5, so between its front lip and the tile's underside
+// — up to 5 mm at the bottom, where the 8.6° eye tilt runs the tile furthest forward —
+// the only thing lining the aperture was the shell's own Ø29.4 bore, in white. And
+// being 14.4 wide against a 14.6 capsule it got sliced open on both flanks as well.
+// Matching the shroud's section to the aperture and running it right up to the tile's
+// back face makes the whole hole one continuous charcoal tunnel.
+const SLEEVE_W = APER_HW + 1.0, SLEEVE_H = APER_HH + 1.0;
+// How far the tunnel is relieved in du behind s-6, where the Ø26 holder enters it. One
+// number sets BOTH sides of the trade — the sleeve's wall (SLEEVE_H - APER_HH - relief)
+// and the clearance over the holder — so it is named here and the audit MEASURES both off
+// the built solid. It was 0.3: a 0.70 mm wall, which is one 0.4 line plus gap fill, and it
+// bought a per-part "0.35 mm line width, 2 walls" override that cannot be applied when the
+// visor arrives as one object among eight in an imported 3MF. 0.2 makes the wall 0.80 =
+// 2 × 0.40 at the default line width, printable with no override at all.
+// The clearance it spends is cheaper than the old prose claimed: that prose said 0.19 mm
+// nominal / 0.116 worst, but the BUILT gap at 0.3 relief measures 0.50 (§7.7 again — a
+// number no check owned). 0.2 leaves 0.40, or 0.25 with the keel at the far end of the
+// ±0.15 mm of du float its r49.5 clip in the r50 bore allows.
+const SLEEVE_RELIEF = 0.2;
+
+
+// ============ SHELL CUTS ============
+// EYE — pocket and tile are bounded by the SAME axis-translated copies of the
+// egg and cut by capsules that differ only in radius (same dx, same 192
+// segments as the egg's revolve), so every boundary pair stays parallel.
+// A local internal pad thickens the wall behind it all — deliberately overbuilt
+// past the pocket floor, so the pocket cut trims it and no two surfaces coincide.
+shell = Manifold.union(shell, Manifold.intersection(
+  eyeCap(21.0, 60, -12), Manifold.difference(eggS(0.972), eggS(0.905))));
+shell = Manifold.difference(shell, Manifold.union([
+  // NOT intersected with outerSolid. That bound is the same revolve the shell's
+  // own skin comes from, so the cut arrived carrying a face coincident with the
+  // face it was cutting — a degenerate boolean, and the rim came out as a
+  // staircase of teeth whatever the cutter's shape or angle. The cone already
+  // reaches 17 mm past the skin; let it, and the rim is nothing but cone ∩ skin.
+  Manifold.difference(eyeCone(0), eggS(K_FLOOR)),
+  // aperture bore through the shell wall — a capsule now, 0.3 clear of the sleeve
+  eyeCapsule(SLEEVE_W + 0.3, SLEEVE_H + 0.3, 60, -12),
+]));
+// vent gills + low intake share ONE set of angles, so the slots stack into three
+// clean columns per side. They had drifted to 14° and 18° pitch respectively —
+// two rows of three that lined up nowhere.
+const VENT_A = [76, 90, 104, 256, 270, 284];
+const gills = VENT_A.map(a => atR(cube(4.5, 16, 24), 62, a).translate([0, 0, 128]));
+// low intake slots — the body sits flat on the desk, so air comes in at the waist
+const intake = VENT_A.map(a => atR(cube(4.5, 16, 24), 62, a).translate([0, 0, 64]));
+// rear exhaust, high behind the dome
+const exhaust = [184, 191, 198].map(z => cube(16, 14, 2.6, 0, rAbs(z) - 1, z));
+// rear cable arch through the bottom band. v5.3: it runs all the way OUT through the rim —
+// no ring left under it. It was a 4 mm band at z36–40, which meant the cable had to be led
+// over a lip instead of laid straight out of the slot. Cutting to z34 leaves the arch open
+// at the bottom face, so it is a slot, not an arch: 16 mm of the rim's ~338 mm circumference
+// goes with it, the shell still stands on the rest, and the rim's brim just runs past the gap.
+const arch = Manifold.union(
+  cube(16, 16, 36, -0.5, 55, 52),
+  Manifold.cylinder(16, 8, 8, 32, true).rotate([90, 0, 0]).translate([-0.5, 55, 70])
+);
+// twist-lock: vertical entry channel (open at the rim) + a true ARC turn slot.
+// The old flat 22 mm cube only reached the bore at its centre — at its ends it
+// left ~1.4 mm of wall standing in the lug's path, so the lug could never turn.
+// revolve() sweeps the real annulus, clear through all 32°.
+const TWIST = 18;   // degrees, entry → locked (13° never cleared the 9 mm channel)
+const arcSlot = a0 => Manifold.revolve(
+  [[[49.7, 39.7], [52.1, 39.7], [52.1, 43.6], [49.7, 43.6]]], 192, 32
+).rotate([0, 0, a0 - 97.5]);
+const lockCuts = [];
+for (const a of LUGS) {
+  lockCuts.push(atR(cube(9, 2.4, 12), 50.9, a).translate([0, 0, 40]));
+  lockCuts.push(arcSlot(a));
+}
+// antenna bayonet socket, OFF the axis at x=10 — the antenna leans out of the
+// dome's shoulder, which is the whole charm of it. Putting it on the axis needed
+// the crown truncated at z225 to a Ø12.5 flat, i.e. a hole punched in the top of
+// the egg that only a hat could hide. Left alone, the dome closes over itself and
+// the Ø6.6 bore opens as an ellipse in the flank around z222.
+const CX = 8;
+const bayoRing = Manifold.cylinder(2.4, 4.6, 4.6, 48, true)
+  .subtract(Manifold.cylinder(3, 2.2, 2.2, 32, true));
+const socket = Manifold.union([
+  cyl(3.3, 17, 0, 0, 217.5, 32),
+  cube(2.4, 2.4, 12, 3.3, 0, 219),
+  cube(2.4, 2.4, 12, -3.3, 0, 219),
+  bayoRing.translate([0, 0, 214.2]),
+]).translate([CX, 0, 0]);
+shell = Manifold.difference(shell, Manifold.union([...gills, ...intake, ...exhaust, arch, ...lockCuts, socket]));
+// simplify() collapses the sliver triangles at the vent-slot corners into
+// zero-volume shells, which slicers hate; drop anything degenerate afterwards.
+if (shell.simplify) shell = shell.simplify(0.01);
+{
+  const bits = shell.decompose();
+  if (bits.length > 1) shell = Manifold.union(bits.filter(p => p.volume() > 1));
+}
+
+// ============ BASE DISC — v5.4: this is not a separate part any more ============
+// The floor puck and the keel are ONE printed part now. What is deleted with the joint:
+// the 43.2 keel slot, the tab channel, its 45° ramp, the two hook blocks, the two detent
+// bumps, the keel's two slide tabs — plus assembly step 1, the service step, one STL and
+// the floor∩keel clash pair. Nothing is lost, because the joint never articulated: sliding
+// the keel onto the puck WAS step 1, and from then on nothing moved relative to it. A joint
+// made once and never moved is a joint you can delete.
+//
+// Why it costs no print orientation — the whole reason this works. The puck printed
+// bottom-face-DOWN; the keel prints UPRIGHT ON ITS PAN; the pan is parallel to the disc.
+// Same axis, same down. So the merged part prints exactly as the keel already did, standing
+// on a Ø99 disc instead of a 42.4 × 96 pan: first layer 4097 → ~7500 mm², and the disc
+// reaches 28 mm forward of the pan's old front edge — which is the direction the ~103 cm³
+// leans. The keel's one support patch (head underside, print z108) is unchanged; the disc
+// adds no overhang, because it IS the first layer.
+//
+// The kit's seat plane does not move (§6.5). The bay floor is PAN_TOP = z40.3, exactly where
+// the pan's top face was, so nothing above z40.4 changes by a layer. Under the kit there is
+// now 3.9 mm of SOLID (z36.4..40.3) where there used to be 2.7 + 0.4 of gap + 1.2 — same
+// material, minus the gaps. And losing that gap closes a §7.11 tolerance: the 0.4 mm/side
+// slot fit is gone, and with it the 0.15 mm of lateral camera offset it allowed.
+let base = Manifold.union([
+  cyl(49.5, 7.2, 0, 0, 40.0),                                          // disc z36.4..43.6
+  // twist-lock lugs, stepped: the lower 1.4 mm halves the unsupported ledge that a
+  // full-height lug leaves above the bed in this orientation. Unchanged by the merge —
+  // the lock, the bore fit and the r49.5 envelope are all exactly as they were.
+  ...LUGS.map(a => atR(cube(8, 3.0, 2.0), 50.2, a + TWIST).translate([0, 0, 42.3])),
+  ...LUGS.map(a => atR(cube(8, 1.6, 1.4), 49.5, a + TWIST).translate([0, 0, 40.6])),
+]);
+base = Manifold.difference(base, Manifold.union([
+  // THE KIT BAY. 42.4 wide (x -21.65..20.75) — the pan's own footprint, and no clearance
+  // either side of it now, because there is no pan to slide in. v5.5: its floor is BAY_FLOOR
+  // (42.5), not PAN_TOP — 2.2 mm of extra solid disc under the kit, carrying the crush pads
+  // that make the press fit. The disc's own top is 43.6, so the bay is a 1.1 mm rebate here
+  // and the kit's real side walls are the shoe front wall and the back plate above it.
+  // CLOSED in y at ±47.5, not run through as the old slot was: the slide-in is gone, so the
+  // disc can stay a continuous ring, which is stiffer, and the end webs' outer faces land
+  // against retained full-height land. (The old slot's open ends are also what forced
+  // LUGS[0] off 90° — see the note at LUGS: that constraint is relaxed now, but the angles
+  // stay unequal, because keying the insertion orientation is a separate reason.)
+  cube(42.4, 95, 0.9, -0.45, 0, BAY_FLOOR + 0.45),                     // z42.7..43.6
+  atR(cube(22, 16, 14), 50, 180).translate([0, 0, 42.6]),              // power-cable scallop
+]));
+// CRUSH PADS — four, and they are the entire compliance in the press fit. A rigid 0.13 mm
+// squeeze between two rigid bodies is not a fit, it is a coin toss: the keel's own z is
+// accurate to a layer, but the KIT's height is a number we do not control and have not
+// measured, and ±0.4 on it swings the joint from 0.5 mm of interference to 0.3 mm of rattle.
+// A 0.8 mm pad tapering to its tip absorbs that: it yields locally instead of jacking the
+// kit against the head. Printed on top of the bay floor they grow UPWARD off solid disc —
+// the whole reason the take-up lives down here (see KIT_LIFT).
+// At y ±28 they sit under the kit's stiff ends, clear of the cable doorway at y 44..49.
+base = Manifold.union([base,
+  ...[28, -28].flatMap(y => [12, -12].map(x => Manifold.union([
+    cube(8, 14, 0.05, x, y, BAY_FLOOR + 0.025),
+    cube(6, 12, 0.05, x, y, BAY_FLOOR + PAD_H - 0.025),
+  ]).hull())),
+]);
+
+// ============ KEEL CRADLE — one charcoal part, and in v5 actually one part ============
+// KEEL: sized to a 103 × 90.5 × 35 kit standing on edge. The kit sits at z40.4 — 11.6 mm
+// lower than v3, which is what makes a real 37 × 37 camera platform possible (at z52 its
+// top corner ran straight through the middle of the board, and v3 hid that by notching the
+// platform away). Nothing is notched.
+// v4 put the kit on the puck's pocket floor and gave the keel no floor at all, and that is
+// what broke: back plate, front wall and two end webs met only at the slivers the Ø99 clip
+// left, so the base sliced as four loose parts. v5 gave the keel its floor back — a 1.2 mm
+// pan at z39.1..40.3 — and took the 1.2 mm out of the puck instead of out of the kit's
+// height. v5.4 goes one step further and merges the puck in entirely, so the pan is not a
+// separate member at all: it is the bay floor of the base disc above. The tie is still under
+// the kit, which is the one place §7.1 proved it can be; there is just no joint left in it.
+// No fasteners anywhere.
+const camHead = Manifold.union([
+  Manifold.intersection(
+    Manifold.union([
+      eyeBox(46, 43.5, HEAD_T, S_HEAD, 0, 0.25),        // head plate, du -21.5..22
+    ]),
+    // Rear underside cut. v3 used one 45° cube, whose second face knifed the FRONT of
+    // the head too — exactly the corner the board's seat ledge needs. This is a single
+    // plane, and 63.4° in the eye frame is 55° in the printer's frame: steeper than the
+    // 45° it replaces, still support-free, and it clears the kit's top corner by 1.2 mm.
+    eyeKnife(63.43, S_HEAD - 4.5, -20.5),
+    // …and the FRONT underside. What was left was a 46 × 8 mm flat face pointing at the
+    // bed (383 mm² of support). A chin gusset can't fix it — the space under the head is
+    // where the dev kit's top 25 mm lives — so the corner is chamfered off instead: -53°
+    // in the eye frame is ~45° once the 8.6° tilt is taken out, and the cut passes below
+    // the seat ledge's root so the board still lands on full-thickness material.
+    eyeKnife(-53, S_BB, -21.5)),
+  // ---- board tray: a 38.0 pocket, walls proud of the seat plane ----
+  // THE BOARD GOES IN ALONG THE EYE AXIS, from the front, and only that way. It cannot
+  // drop in from above: its heatsink and its cables stand off the BACK face and would
+  // have to travel down through 9 mm of solid head plate to get to the window. So the
+  // tray is a pocket that is open at the front and open at the top, and nothing —
+  // no lip, no detent, no ledge — may overhang the board's own 37 × 37 outline.
+  // Rails at dx ±19.0 inner: 38.0 clear for a 37 mm board, 0.5/side, which survives a
+  // board on the high side of tolerance AND a pocket printed 0.3 narrow.
+  eyeBox(3.6, 46.5, RAIL_H, S_BB + RAIL_H / 2, 20.8, 3.25),
+  eyeBox(3.6, 46.5, RAIL_H, S_BB + RAIL_H / 2, -20.8, 3.25),
+  // Channel lips, du 19.2..26.0 — ABOVE the board's top edge (18.5), never beside it.
+  // They are the clamp's forward stop (underside at s = S_BB + 5.9) and its guide on
+  // the way down; they hold the clamp's top corners, dx 16.1..19.0.
+  eyeBox(2.9, 6.8, 1.7, S_BB + RAIL_H - 0.85, 17.55, 22.6),
+  eyeBox(2.9, 6.8, 1.7, S_BB + RAIL_H - 0.85, -17.55, 22.6),
+  // (the old lateral detents lived here: two 0.5 mm bumps that reached 2.5 mm into a
+  // channel the clamp filled completely. They did not detent anything — they were a
+  // 2.5 mm/side interference in a part with nothing slender enough to flex, i.e. the
+  // clamp could not be fitted at all. The clamp now carries its own sprung barbs and
+  // the rails carry the pockets they lock into; see the keel's difference list.)
+  // seat ledge under the board — 3.6 mm at the root, 1.2 at the tip, underside at 53°
+  // in the printer's frame (no support), root 0.9 mm clear of the kit's top corner.
+  // Top face at du -18.6: the board's bottom edge lands on it after a 0.1 mm drop, and
+  // it reaches only 1.7 mm forward of the seat plane, so it is under the board and
+  // clear of the clamp's arms.
+  Manifold.union([
+    eyeBox(46, 3.6, 0.1, S_BB + 0.05, 0, -20.4),
+    eyeBox(46, 1.2, 0.1, S_BB + 1.65, 0, -19.2),
+  ]).hull(),
+]);
+let keel = Manifold.union([
+  // THE MEMBERS. Every one still starts at z39.1 — 1.2 mm BELOW the bay floor — so it runs
+  // down THROUGH the base into solid material instead of landing on it (§7.3: a face that
+  // merely touches is a butt joint with no weld at all). Back plate alone: 3.5 × 92 × 1.2 =
+  // 386 mm³ of weld. The base is unioned in after the Ø99 clip below, because the lugs are
+  // deliberately outside r49.5 and the clip would shear them off.
+  cube(3.5, 92, 108.9, -19.9, 0, 93.55),        // back plate z39.1..148
+  cube(3.5, 22, 56, -19.9, 0, 168),             // tongue up behind the camera head
+  cube(2.5, 96, 18.5, 19.5, 0, 48.35),          // shoe front wall z39.1..57.6, 36.4 interior
+  cube(42.4, 1.5, 16.5, -0.45, 46.75, 47.35),   // end webs: they stop the kit at both ends.
+  cube(42.4, 1.5, 16.5, -0.45, -46.75, 47.35),  // The base ties them on now, not their corners.
+  camHead,
+]);
+// hard rule: nothing on the cradle may exceed the Ø99 that fits up the bore. Applied to the
+// members ONLY — the base's three lugs live outside r49.5 on purpose (they ride the entry
+// channels cut into the bore wall), so the clip has to happen before the base is unioned in.
+keel = Manifold.intersection(keel, cyl(49.5, 400, 0, 0, 200, 192));
+// …and now the two parts are one. The -x land stands 3.3 mm against the back plate's whole
+// 92 mm outer face — a stiffener the split geometry could never have had.
+keel = Manifold.union([keel, base]);
+keel = Manifold.difference(keel, Manifold.union([
+  cube(4, 3.2, 6, 19.5, -25, 50),   // cable-tie anchor through the shoe front wall — the ONE
+                                    // tie left in the build, and it is strain relief on the
+                                    // camera flex, not structure.
+  // (v5.5: the kit's two zip-tie slots are deleted. They were structural — they carried the
+  // kit — and the press fit carries it now: pads below, head band above, 36.4 mm of shoe
+  // either side. A tie that holds nothing is a hole in a stiffener. If the bench finds the
+  // press insufficient on a real kit, four cubes at y±30, z78/z128 bring them straight back.)
+  // (v5.5: no entry reliefs, and none are needed — I cut two and measured them doing nothing.
+  // The kit does not need a pocket to swing through: rotating about its far end at y+45, a
+  // 0.2° tilt clears the 0.33 mm of squeeze at y -11.5. It goes in ANGLED, one end first.
+  // That was always true — swept straight up the kit hits 3936 mm³ of head, all of it in that
+  // one band at y -21..-4 — and no assembly step ever said so. Step 1 says it now.)
+  // THE POWER-CABLE DOORWAY through the +y end web, the bay floor and the base's retained
+  // +y cap. v5.4, and it is a FIX, not a merge consequence: v5 checked ['floor','plugs'] but
+  // never ['keel','plugs'] — the merged part put both under one name, the pair became
+  // unavoidable, and it reported 30.8 mm³. The plug ghost spans z42.4..54.4 and the notch
+  // stopped at z50, so 4.4 mm of web has been standing in the barrel plug's way since v5.
+  // §7.15 exactly: absence from the matrix is indistinguishable from an untested pair.
+  // Cut OPEN at the top (z36..56, past the web's own 55.6) rather than to a strap: a 0.6 mm
+  // lintel over a 14 mm span is a bridge nobody asked for. What is left is two ~12.7 mm
+  // pillars either side, both rooted in the base, which still stop the kit lengthwise.
+  // 17 wide, not 14: the old notch matched the ghost's width exactly, i.e. 0.00 mm/side to a
+  // real plug on a real cable (§7.10). 1.5 mm/side now.
+  // v5.5: z36..60, not z36..56. The kit rose 3.1 mm and took its power socket with it, so the
+  // plug now spans z45.5..57.5 — 1.5 mm ABOVE the roof this cut was sized for one version ago.
+  // It was only ever harmless because the +y web itself ends at 55.6; the doorway had stopped
+  // framing the plug it exists for. Sized off the ghost again, with margin.
+  cube(17, 5, 24, -0.5, 46.75, 48),                 // x -9..8, y 44.25..49.25, z36..60
+  // (the old "detent notches in the tabs" cut lived at y±9 from the hook centres, i.e.
+  // 2 mm clear of the tabs themselves — it removed no material at all. Deleted; the
+  // puck's bump behind the tab is the whole detent, and it has moved in to y±7.5.)
+  // ONE opening, not a window plus a cable frame: heatsink, both connectors and both
+  // cables all leave straight back through it into the keel's chimney and out the three
+  // rear exhaust slots. Nothing here is dimensioned off the connectors, so a 0.5 mm
+  // error in where they sit — or a board handed the other way — changes nothing.
+  eyeBox(WIN_W, WIN_H, 14, S_HEAD),
+  // J1 relief: dx ±11.5, du -17.8..-15.6, i.e. the window pushed 1.3 mm further down over
+  // the 4-pin connector only (it reaches du -17.1). 0.7 mm clear of it, 3.7 mm of head plate
+  // still below the notch, and the bottom seat strip survives at dx 11.5..18.5 either side.
+  eyeBox(23.0, 2.2, 14, S_HEAD, 0, -16.7),
+  // J2 relief, and the reason is DROOP, not fit. The window's roof is a 32 mm bridge tilted
+  // 8.6°, and slicers routinely mis-detect sloped bridges and sag them. At WIN_H 33.0 the
+  // roof edge sits at du 16.5 and J2's block tops out at du 15.7 — 0.8 mm, not the 2.75 the
+  // guide quoted for three versions, which was the old 36.8 window's number. One drooped
+  // layer eats most of 0.8 and the board stops on a connector instead of on the seat frame.
+  // So the roof is pushed up 1.0 mm over J2 alone — the same trade §5.1b made for J1:
+  // dx ±9.1 (0.7 clear of the 8.4 block) costs 1.0 mm of the top strip over 18.2 mm of its
+  // width and keeps the full 2.0 mm either side of that. J2 headroom 1.8 mm; the strip still
+  // standing behind J2 is 1.0 mm, and the board's back face still lands on it.
+  eyeBox(18.2, 1.5, 14, S_HEAD, 0, 16.75),
+  // clamp latch pockets, one in each rail's inner face: dx 18.8..20.4 (1.4 deep, leaving
+  // 2.2 mm of rail outside), du -19.2..-15.3, s S_BB+2.6..6.0 — which is entirely IN FRONT
+  // of the board (it ends at S_BB+1.8 worst case), so the pocket takes nothing away from the
+  // rail that guides the board in. A recess cannot obstruct the slide-in, which is why the
+  // latch lives here and not on a lip: anything reaching over the board's outline is a
+  // blocked assembly.
+  eyeBox(1.6, 3.9, 3.4, S_BB + 4.3, 19.6, -17.25),
+  eyeBox(1.6, 3.9, 3.4, S_BB + 4.3, -19.6, -17.25),
+]));
+
+// ============ CAMERA CLAMP — slides down the head's rails, no screws ============
+// The board is bolted to nothing. It drops into the tray, sits on the ledge, and this
+// frame slides down the two channels, presses it flat and clicks past the lip detents.
+// Printed face-down it is a flat 2.5 mm frame: no overhangs, no supports.
+// It is a STAPLE, not a ring — two arms down the board's sides and one bridge across
+// its top, open at the BOTTOM. A closed Ø29 hole cannot be slid down over a Ø26 barrel
+// standing 26 mm proud of the board: the plate above the hole runs straight through it
+// (a swept-volume check caught 1324 mm³ of overlap — the holder's cross-section × the
+// plate's thickness). Nor does opening the hole out through the TOP edge help: whatever
+// material sits below the ring then has to travel down through the barrel instead. Only
+// a part with nothing below the barrel can make the trip. The arms clear the Ø26 holder
+// by 0.9 mm and press both side margins; the bridge lands on the top margin and holds
+// the arms, which are the springs.
+// v5.1 — what this part is FOR, since the old comments oversold it. It is a capture
+// plate with two live arms, not a press. Three things do three jobs:
+//   • the two 2.0 mm PADS on its back face are the ONLY things that touch the board, and
+//     they sit at dx 16.4..18.4 — directly over the 2.5 mm seat strips behind it, in the
+//     outer 2 mm of the board where no module of this family puts a component. The board is
+//     pinched between pad and seat, front to back, with no bending moment on it. Board
+//     thickness is 1.4–1.8 depending on which module you bought: pads + a 0.2 mm float give
+//     0.1–0.5 mm of squash across that whole range, taken by the arms bowing (~5 N/mm).
+//   • the PLATE BODY stands 1.3 mm clear of the board's front face (1.1 on a thick board).
+//     It has to: inboard of the pads the plate crosses the front face, and a 2.8 mm slab
+//     laid flat on it would sit on whatever is soldered there. Nothing touches inboard of
+//     dx 16.4 — the 1.6 mm pads are the standoff, and the Ø29 ring clears the holder.
+//   • the two BARBS at the arms' free ends drop into the rail pockets. The arm is a
+//     31 mm cantilever, 4.6 × 2.8 in section: 0.6 mm of deflection costs ~4 N going in,
+//     and the barb's square-ish top face is what stops the clamp lifting back out.
+//   • the top corners sit under the LIPS, which take the forward load at the top.
+// So: seat frame behind, pads in front, rails at the sides, ledge below, lips above. The
+// visor sleeve over the holder is the final location; this part holds the board flat and
+// captive while the sub-assembly is twisted into the shell.
+const CLAMP_T = 2.8;                 // plate thickness
+const PAD_T = 1.6;                   // pads stand this far proud of the plate's back face
+const CLAMP_S = S_BB + 1.3 + PAD_T;  // plate back face; pad face at S_BB+1.3 = 0.3 into a
+                                     // nominal 1.6 board, 1.3 mm clear of its front face
+let clamp = eyeBox(37.0, 43.6, CLAMP_T, CLAMP_S + CLAMP_T / 2, 0, 2.75);
+clamp = Manifold.difference(clamp, Manifold.union([
+  eyeCyl(RING_R, 12, CLAMP_S + CLAMP_T / 2, 96),             // Ø29 ring over the Ø26 lens holder
+  eyeBox(27.8, 60, 12, CLAMP_S + CLAMP_T / 2, 0, -16.1),     // open below the barrel: du -46.1..13.9
+  eyeBox(7, 2.2, 12, CLAMP_S + CLAMP_T / 2, 0, 23.55),       // pry notch, to lift it back out
+]));
+clamp = Manifold.union([clamp,
+  // pressure pads, dx 16.4..18.4 × du -17.5..17.5 — aligned with the seat strips behind
+  // the board (dx 16..18.5), so the pinch is strip-on-strip. They were 3.6 wide reaching
+  // in to dx 14.6, which is inboard of the ~2 mm clear border a real module has.
+  // The LOWER end of each pad is ramped ~45° over its last 1.6 mm of du (hull of the pad
+  // against a 0.1 mm sliver at the plate's own back face). Square-ended, a 1.6 mm pad that
+  // stands 0.3 mm into a nominal board — 0.5 into a thick one — drags that step across 35 mm
+  // of the board's front border on every insertion: §8's detent complaint, on the one part
+  // whose mistake costs a camera. Ramped, it cams on, and seated contact only goes 35 → 33.4.
+  ...[1, -1].map(sg => Manifold.union([
+    eyeBox(2.0, 33.4, PAD_T, CLAMP_S - PAD_T / 2, sg * 17.4, 0.8),
+    eyeBox(2.0, 35, 0.1, CLAMP_S - 0.05, sg * 17.4, 0),
+  ]).hull()),
+  // snap barbs: crest at dx ±19.6 (0.6 proud of the rail face), a 37° lead-in below and
+  // a 34° release ramp above, so it clicks in and can still be pried back out.
+  ...[1, -1].map(sg => Manifold.union([
+    eyeBox(1.6, 0.6, CLAMP_T, CLAMP_S + CLAMP_T / 2, sg * 18.8, -17.2),
+    eyeBox(0.6, 0.6, CLAMP_T, CLAMP_S + CLAMP_T / 2, sg * 18.3, -18.5),
+    eyeBox(0.8, 0.6, CLAMP_T, CLAMP_S + CLAMP_T / 2, sg * 18.4, -16.0),
+  ]).hull()),
+]);
+
+// ============ EYE VISOR — charcoal tile, single Ø17 lens aperture ============
+// The last cause of the sawtooth was simply that the shadow line was finer than
+// the mesh: a 0.25 mm gap between two differently-triangulated copies of the same
+// capsule outline lets them cross by more than the gap, so shell and tile
+// alternate along the rim. The visible gap is now 0.9 mm — wider than any
+// discretisation error, and a crisp panel line rather than a fought seam. Under it
+// the tile steps out to a foot 0.45 mm from the pocket wall, so nothing white
+// shows through the groove.
+// The tile is FLUSH to the pocket wall bar a 0.2 mm glue clearance. A wider panel
+// line was the whole problem: the pocket wall is white shell, standing almost
+// perpendicular to the skin, so a 0.9 mm groove lit up as a ragged white fringe
+// round the eye at every glancing angle. The shadow line comes from the 0.3 mm
+// recess instead — charcoal under charcoal — and the only white left is 0.2 mm.
+let bezel = Manifold.union([
+  Manifold.intersection(eyeCone(0.2),
+    Manifold.difference(eggS(K_FACE), eggS(K_FOOT))),
+  // Light shroud — a capsule sleeve on the aperture's own section, running from s-17
+  // forward until the tile's back face stops it, so the hole is lined in charcoal the
+  // whole way round. NOT a tube in front of the glass — that would vignette a Ø17 optic
+  // the moment it is more than a few mm long.
+  Manifold.intersection(
+    eyeCapsule(SLEEVE_W, SLEEVE_H, 26, -4),
+    eggS(K_FACE)),
+]);
+// one cut, s-20 → s20: the tile's aperture and the sleeve's bore are the same capsule,
+// so there is no lip, no step and no shell visible between them.
+bezel = Manifold.difference(bezel, eyeCapsule(APER_HW, APER_HH, 40, 0));
+// …and BEHIND s-6 the tunnel is relieved SLEEVE_RELIEF in du, so the sleeve slides down
+// over the Ø26 holder instead of landing on it. The visor is the LAST part fitted and the
+// only glued one: a sleeve that lands on the holder sits proud or cocked in its pocket for
+// good. Relieving only s ≤ -6 keeps the aperture exactly 29.2 × 26.4 where it is seen and
+// where the field uses it (the cone converges toward the lens, so a wider tunnel behind it
+// cannot clip anything) and keeps the tunnel one continuous charcoal tube. It costs
+// SLEEVE_RELIEF of a 1.0 mm wall over the 11 mm the holder occupies — 0.80 mm left, which
+// is two 0.40 lines and needs no slicer override. Both numbers are measured in the audit.
+bezel = Manifold.difference(bezel, eyeCapsule(APER_HW, APER_HH + SLEEVE_RELIEF, 22, -17));
+bezel = Manifold.intersection(bezel, eggS(K_FACE));               // hard cap: never past the face
+
+// ============ ANTENNA — bayonet stem, quarter-turn, no glue ============
+// Two printed parts, two colours: a charcoal stem and a red ball tip that presses onto it.
+// The stem turns down to a Ø4 pin above z24.5, so the tip's flat underside lands on a real
+// shoulder instead of floating on the pin, and the tip prints flat-side-down — a Ø7.1 first
+// layer with a Ø4.15 hole in it, not a ball balanced on a point.
+const ANT_AT = [CX, 0, 209.3];
+const antStem = Manifold.union([
+  cyl(2.9, 24.5, 0, 0, 12.25, 64),
+  cyl(2.0, 4.0, 0, 0, 26.5, 48),
+  Manifold.cylinder(8.2, 0.9, 0.9, 16, true).rotate([90, 0, 0]).translate([0, 0, 4.9]),
+]).translate(ANT_AT);
+const antTip = Manifold.difference(
+  Manifold.intersection(
+    Manifold.sphere(5, 64).translate([0, 0, 28]),
+    cube(20, 20, 20, 0, 0, 34.5)),          // flat underside at z24.5, on the stem's shoulder
+  cyl(2.075, 4.2, 0, 0, 26.6, 48),          // socket, 0.15 mm total fit over the Ø4 pin
+).translate(ANT_AT);
+const antenna = Manifold.union([antStem, antTip]);
+const antW = antenna;
+
+
+// ============ hardware ghosts (audit + display, never printed) ============
+// NVIDIA Orin Nano dev kit, bare board + heatsink: 103 × 90.5 × 35 mm.
+const kitGhost = cube(35, 90.5, 103, 0, 0, KIT_Z0 + 51.5);   // dev kit on edge, z43.5..146.5
+// v5.5: these are dimensioned off KIT_Z0 now, and that is a fix, not tidying. They// were z literals — plug centre 48.4, cable centre 43.5 — written when KIT_Z0 was frozen at
+// 40.4. Raising the kit 3.1 mm raised its rear power socket 3.1 mm and left both ghosts
+// behind, so keel∩plugs, shell∩plugs, keel∩cable and shell∩cable were all still passing —
+// 3.1 mm below where the plug and the lead now are. §7.15 for the third time, and the nastiest
+// shape of it yet: not a pair MISSING from the matrix but a pair IN the matrix, evaluated in
+// the wrong place. It reads as a green line either way. And it would have gone on lying the
+// moment the bench retunes KIT_LIFT — which the audit itself tells them to do.
+// A ghost that is not derived from the datum it belongs to is not a check, it is a decoration.
+const plugGhost = cube(14, 22, 12, -0.5, 58, KIT_Z0 + 8.0);   // power plug through the rear arch
+// the two cables, as volumes the audit has to keep clear. ALL THREE ghosts that touch the kit
+// — plug, power lead, and the camera flex's kit end — are derived off KIT_Z0. Hardcoding their
+// z is what let v5.5's 3.1 mm kit lift slip past four pairs at once (§5.1i); the flex was the
+// one the first sweep missed, which is the rule earning itself a second hearing.
+// Ø7 power lead: barrel plug on the kit's rear face, straight out the arch ~7 mm above the
+// desk. Ø5 camera USB: out of the heatsink pocket sideways, then down the
+// +x flank between the kit and the wall to the rear ports — the front of the
+// keel plate is 0.6 mm from the kit and the plate's bottom edge is 0.4 mm above
+// it, so neither straight-down route exists.
+const seg = (a, b, r) => Manifold.union([
+  Manifold.sphere(r, 32).translate(a), Manifold.sphere(r, 32).translate(b),
+]).hull();
+const cableGhost = Manifold.cylinder(26, 3.5, 3.5, 32, true)
+  .rotate([90, 0, 0]).translate([-0.5, 57, KIT_Z0 + 3.1]);
+// Both camera cables now plug into the back of the board and leave STRAIGHT BACK through
+// the head's opening — no rise over the board's top edge, no slot to thread, nothing that
+// has to line up with a connector. Then down the +x flank to the kit's CSI header.
+const flexGhost = Manifold.union([
+  seg(at(S_BB - 3, -6, 10), at(S_BB - 13, -6, 10), 2.2),      // out the back of the head
+  seg(at(S_BB - 3, 6, -14), at(S_BB - 13, -6, 10), 2.2),      // the 4-pin, same exit
+  seg(at(S_BB - 13, -6, 10), [-4, 16, 176], 2.2),   // outboard of the keel tongue (y±11)
+  seg([-4, 16, 176], [20, 16, 150], 2.2),
+  seg([20, 16, 150], [20, -6, KIT_Z0 + 89.6], 2.2),            // down the +x flank
+  seg([20, -6, KIT_Z0 + 89.6], [21, -6, KIT_Z0 + 87.6], 2.2),  // into the kit's CSI header
+]);
+const camGhost = Manifold.union([
+  eyeBox(BOARD, BOARD, BOARD_T, S_BB + BOARD_T / 2),                 // 37 × 37 board
+  eyeBox(26, 26, 10, S_BB - 5),                                      // heatsink, through the window
+  eyeCyl(HOLDER_R, LENS_0, S_BF + LENS_0 / 2, 48),                   // Ø26 holder, 0 → 26 out
+  // both measured connectors, on the board's BACK face, mirrored in dx: the audit then
+  // holds for either handedness of the board
+  ...CONNS.map(c => eyeBox(2 * c.dx, c.du1 - c.du0, c.out,
+    S_BB - c.out / 2, 0, (c.du0 + c.du1) / 2)),
+]);
+// Focus travel, 21 → 31 mm: modelled separately because it is the one part of the stack
+// that must NOT be extended during insertion. Racked out, the barrel's front rim sits at
+// r47.4 — 2.6 mm inside the r50 twist-lock bore, so it passes the BORE either way. It
+// does not pass the TWIST: the shell's inner wall at the eye pad (z181–185) is r49.0, and
+// sweeping the 18° rotation as a volume finds 7.5 mm³ of the racked-out barrel against
+// it. Rack it in for insertion; set the focus afterwards, through the bottom bore. A
+// radius test against r50 cannot see this, which is why the audit now says so in words.
+const focusGhost = eyeCyl(LENS_BR, LENS_1 - LENS_0, S_BF + (LENS_0 + LENS_1) / 2, 48);
+
+// ============ mesh plumbing ============
+// Normals come from Manifold with a 40° sharp-edge threshold, NOT from three's
+// computeVertexNormals(). That was the last "defect" round the eye: at the rim a
+// vertex is shared between the skin and the pocket wall, so averaging blended a
+// 60° corner into it — and because a revolve alternates which rim vertices carry
+// a wall triangle, the blend alternated too and lit up as a comb of teeth. It
+// survived every change to the cutter and got finer, never fewer, as the mesh got
+// denser: the giveaway that it was shading, not solid. The exported STL/3MF was
+// always clean.
+function toThree(man) {
+  const src = man.calculateNormals ? man.calculateNormals(3, 40) : man;
+  const m = src.getMesh();
+  const np = m.numProp, vp = m.vertProperties, n = vp.length / np;
+  const off = np >= 6 ? np - 3 : 0;   // getMesh() puts position at 0..2, then the
+  const pos = new Float32Array(n * 3), nrm = off ? new Float32Array(n * 3) : null;
+  for (let v = 0; v < n; v++) {
+    pos[v * 3] = vp[v * np]; pos[v * 3 + 1] = vp[v * np + 1]; pos[v * 3 + 2] = vp[v * np + 2];
+    if (nrm) { nrm[v * 3] = vp[v * np + off]; nrm[v * 3 + 1] = vp[v * np + off + 1]; nrm[v * 3 + 2] = vp[v * np + off + 2]; }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  if (nrm) g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(m.triVerts), 1));
+  g.rotateX(-Math.PI / 2);
+  if (!nrm) g.computeVertexNormals();
+  return g;
+}
+function forPrint(man, rot) {
+  const r = rot ? man.rotate(Array.isArray(rot) ? rot : [rot, 0, 0]) : man;
+  const b = r.boundingBox();
+  return r.translate([
+    -(b.min[0] + b.max[0]) / 2, -(b.min[1] + b.max[1]) / 2, -b.min[2],
+  ]);
+}
+
+const white = new THREE.MeshStandardMaterial({ name: 'shell_white', color: 0xf5f1ea, roughness: 0.55 });
+const charcoal = new THREE.MeshStandardMaterial({ name: 'charcoal', color: 0x2b2b2f, roughness: 0.7, metalness: 0.05 });
+const coral = new THREE.MeshStandardMaterial({ name: 'accent_red', color: 0xc23434, roughness: 0.4 });
+const hatBlack = new THREE.MeshStandardMaterial({ name: 'hat_black', color: 0x131316, roughness: 0.82 });
+const qdrantRed = new THREE.MeshStandardMaterial({ name: 'qdrant_red', color: 0xdc244b, roughness: 0.38 });
+const ghostGreen = new THREE.MeshStandardMaterial({ color: 0x3a7d44, transparent: true, opacity: 0.28, roughness: 0.6, depthWrite: false });
+
+const PARTS = [
+  // v5.4: no l6b1_floor. The puck and the keel are one part — eight printed parts became
+  // seven, and the charcoal plate lost its Ø99 disc, so the keel's own footprint IS that disc.
+  { file: 'l6b1_keel', solid: keel, rot: 0, mat: charcoal, plate: 0, at: [40, -50] },
+  // pads up, plate face down: with the pads on the bed the 2.8 mm plate would print as a
+  // 212 mm² island 0.6 mm in the air. 180° about y puts the flat face on the bed.
+  { file: 'l6b1_camera_clamp', solid: clamp, rot: [-eyeRot, 180, 0], mat: charcoal, plate: 0, at: [-60, 55] },
+  { file: 'l6b1_eye_visor', solid: bezel, rot: 270 + D(TILT), mat: charcoal, plate: 0, at: [-60, -10] },
+  { file: 'l6b1_antenna', solid: antStem, rot: 0, mat: charcoal, plate: 0, at: [-60, -60] },
+  { file: 'l6b1_antenna_tip', solid: antTip, rot: 0, mat: qdrantRed, plate: 2, at: [0, 0] },
+  { file: 'l6b1_shell', solid: shell, rot: 0, mat: white, plate: 1, at: [0, 0] },
+];
+const PLATES = [
+  { name: 'charcoal', file: 'l6b1_charcoal_plate', x: -140 },
+  { name: 'white', file: 'l6b1_white_plate', x: 140 },
+  { name: 'red', file: 'l6b1_red_plate', x: 420 },
+];
+const BED = 256;
+// ============ THE EXPORT BOUNDARY (§7.8) ============
+// Watertight-as-indexed is not clean-as-a-file. Manifold welds coincident vertices only on
+// import, so every knife-edge convergence in this model — the crown apex, the aperture
+// capsule's tangent points, the mark hexagon's corners — leaves duplicate verts and
+// zero-area triangles in the indexed mesh, and that is where a slicer's "invalid mesh —
+// repaired N errors" comes from. simplify() collapses the degenerate triangles; anything it
+// leaves under 1 mm³ is a crumb shed by the boolean, not a part.
+// This runs ONCE, on pt.print, which is the only thing the STL writer, the 3MF writer and
+// the audit ever read — so all three go through it by construction and cannot diverge.
+function cleanMesh(man) {
+  let m = man.simplify ? man.simplify(0.01) : man;
+  const bits = m.decompose();
+  if (bits.length > 1) {
+    const keep = bits.filter(p => p.volume() > 1);
+    if (keep.length === 1) m = keep[0];
+    else if (keep.length > 1) m = Manifold.union(keep);
+  }
+  return m;
+}
+for (const pt of PARTS) { pt.print = cleanMesh(forPrint(pt.solid, pt.rot)); pt.geo = toThree(pt.solid); }
+
+// ============ scenes ============
+function meshOf(pt, geo) { const m = new THREE.Mesh(geo || pt.geo, pt.mat); m.name = pt.file; return m; }
+let ghostGroup;
+function assembled() {
+  const g = new THREE.Group(); g.name = 'l6_bot_v5';
+  for (const pt of PARTS) {
+    g.add(meshOf(pt));
+  }
+  ghostGroup = new THREE.Group(); ghostGroup.name = 'hardware_ghosts';
+  for (const gh of [kitGhost, camGhost, focusGhost, plugGhost, cableGhost, flexGhost]) {
+    const m = new THREE.Mesh(toThree(gh), ghostGreen); ghostGroup.add(m);
+  }
+  g.add(ghostGroup);
+  g.position.y = -Z0;   // body rests flat on the desk — no legs
+  return g;
+}
+function printPlate() {
+  const g = new THREE.Group(); g.name = 'l6_bot_v5_print';
+  for (const pt of PARTS) {
+    const m = meshOf(pt, toThree(pt.print));
+    m.position.set(pt.at[0] + PLATES[pt.plate].x, 0, -pt.at[1]);
+    g.add(m);
+  }
+  return g;
+}
+
+// ============ audit ============
+function topology(man) {
+  const m = man.getMesh(), np = m.numProp, vp = m.vertProperties, tv = m.triVerts;
+  const use = new Map();
+  const bump = (a, b) => {
+    const k = a < b ? a * 4294967296 + b : b * 4294967296 + a;
+    const e = use.get(k);
+    if (e) { e.n++; e.d += a < b ? 1 : -1; } else use.set(k, { n: 1, d: a < b ? 1 : -1 });
+  };
+  for (let t = 0; t < tv.length; t += 3) { bump(tv[t], tv[t + 1]); bump(tv[t + 1], tv[t + 2]); bump(tv[t + 2], tv[t]); }
+  let nonManifold = 0, open = 0, badWinding = 0;
+  for (const e of use.values()) {
+    if (e.n === 1) open++; else if (e.n > 2) nonManifold++; else if (e.d !== 0) badWinding++;
+  }
+  const seen = new Set();
+  let dupes = 0;
+  for (let v = 0; v < m.numVert; v++) {
+    const k = Math.round(vp[v * np] * 1000) + ',' + Math.round(vp[v * np + 1] * 1000) + ',' + Math.round(vp[v * np + 2] * 1000);
+    if (seen.has(k)) dupes++; else seen.add(k);
+  }
+  return { nTri: tv.length / 3, nVert: m.numVert, nonManifold, open, badWinding, dupes, genus: man.genus(), volume: man.volume() };
+}
+function emptyLayers(man, step = 0.2) {
+  const m = man.getMesh(), np = m.numProp, vp = m.vertProperties, tv = m.triVerts;
+  const b = man.boundingBox();
+  const z0 = b.min[2], n = Math.max(1, Math.floor((b.max[2] - z0) / step));
+  const bins = Array.from({ length: n }, () => []);
+  for (let t = 0; t < tv.length; t += 3) {
+    const a = tv[t] * np, c = tv[t + 1] * np, d = tv[t + 2] * np;
+    const lo = Math.min(vp[a + 2], vp[c + 2], vp[d + 2]), hi = Math.max(vp[a + 2], vp[c + 2], vp[d + 2]);
+    const i0 = Math.max(0, Math.floor((lo - z0) / step) - 1), i1 = Math.min(n - 1, Math.ceil((hi - z0) / step));
+    for (let L = i0; L <= i1; L++) bins[L].push(t);
+  }
+  const bad = [];
+  for (let L = 0; L < n; L++) {
+    const z = z0 + (L + 0.5) * step + 7e-4;
+    let area = 0;
+    for (const t of bins[L]) {
+      const vi = [tv[t] * np, tv[t + 1] * np, tv[t + 2] * np];
+      const hit = [];
+      for (let e = 0; e < 3; e++) {
+        const a = vi[e], c = vi[(e + 1) % 3];
+        const za = vp[a + 2], zc = vp[c + 2];
+        if ((za < z) === (zc < z)) continue;
+        const s = (z - za) / (zc - za);
+        hit.push([vp[a] + s * (vp[c] - vp[a]), vp[a + 1] + s * (vp[c + 1] - vp[a + 1])]);
+      }
+      if (hit.length !== 2) continue;
+      const ax = vp[vi[0]], ay = vp[vi[0] + 1];
+      const ux = vp[vi[1]] - ax, uy = vp[vi[1] + 1] - ay, uz = vp[vi[1] + 2] - vp[vi[0] + 2];
+      const wx = vp[vi[2]] - ax, wy = vp[vi[2] + 1] - ay, wz = vp[vi[2] + 2] - vp[vi[0] + 2];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz;
+      const dx = -ny, dy = nx;
+      let [h0, h1] = hit;
+      if ((h1[0] - h0[0]) * dx + (h1[1] - h0[1]) * dy < 0) { const s = h0; h0 = h1; h1 = s; }
+      area += h0[0] * h1[1] - h1[0] * h0[1];
+    }
+    if (Math.abs(area) * 0.5 < 0.5) bad.push(z);
+  }
+  const ranges = [];
+  for (const z of bad) {
+    const last = ranges[ranges.length - 1];
+    if (last && z - last[1] <= step * 1.5) last[1] = z; else ranges.push([z, z]);
+  }
+  return ranges;
+}
+// bed contact + genuinely unsupported area, measured by slicing the part in its
+// PRINT orientation: area in a layer that the layer below (grown by one layer's
+// worth) does not cover — i.e. steeper than 45°. Face-normal tests flag every
+// convex dome as an overhang; this does not. Unsupported area that still falls
+// inside the previous layer's convex hull is a BRIDGE (fine); area outside it is
+// a cantilever, which is what actually needs support.
+// Sampled, not exhaustive: a 190 mm part at one slice per layer is ~950 boolean
+// pairs and locks the tab for half a minute. 40 probes catch any overhang big
+// enough to matter, and the whole audit stays under a couple of seconds.
+function printStats(man, probes = 80) {
+  const b = man.boundingBox(), h = b.max[2] - b.min[2];
+  const step = Math.max(0.6, h / probes);
+  let prev = null, bridge = 0, cant = 0, worst = 0, wz = 0, bed = 0, where = null;
+  for (let z = 0.1; z < h; z += step) {
+    const cs = man.slice(z);
+    if (!prev) bed = cs.area();
+    else {
+      const un = cs.subtract(prev.offset(step, 'Miter', 2, 0));
+      const a = un.area();
+      if (a > 0.05) {
+        const cSec = un.subtract(prev.hull());
+        const c = cSec.area();
+        cant += c; bridge += a - c;
+        if (c > worst) { worst = c; wz = z; where = cSec.bounds(); }
+      }
+    }
+    prev = cs;
+  }
+  return { bed, bridge, cant, worst, wz, step, where };
+}
+const CLASH_SOLIDS = {
+  shell, keel, clamp, bezel, antenna: antW,
+  jetson: kitGhost, plugs: plugGhost, camera: camGhost, focus: focusGhost,
+  cable: cableGhost, flex: flexGhost,
+};
+const CLASH_PAIRS = [
+  ['shell', 'keel'], ['shell', 'clamp'], ['shell', 'bezel'],
+  ['shell', 'antenna'], ['shell', 'jetson'], ['shell', 'plugs'], ['shell', 'camera'],
+  // Absence from this list means untested — hence this note. SPEC §7.15, assembly step 11.
+  // v5.4: ['floor','keel'] is gone because 'floor' is gone — the two are one solid now, so
+  // the pair that used to prove they did not interfere is answered by weldCheck() instead:
+  // one body, no neck under 0.4 mm. Everything the puck used to be checked against (kit,
+  // plug, camera, cable) is still checked — as part of 'keel'.
+  ['keel', 'jetson'], ['keel', 'plugs'], ['keel', 'camera'], ['keel', 'clamp'],
+  // ['clamp','camera'] is deliberately NOT here: the clamp's pads are an interference
+  // fit on the board by design. The squash is measured and reported on its own line.
+  ['clamp', 'jetson'], ['bezel', 'camera'],
+  ['shell', 'focus'], ['bezel', 'focus'], ['clamp', 'focus'], ['keel', 'focus'],
+  // the two things v3 never checked, and both were interfering: the board itself
+  // against the dev kit, and the camera against the shell's eye pad.
+  ['camera', 'jetson'],
+  ['shell', 'cable'], ['keel', 'cable'],
+  ['shell', 'flex'], ['keel', 'flex'], ['clamp', 'flex'], ['jetson', 'flex'],
+];
+const report = document.getElementById('report');
+// Counting bodies is not enough, and v4 proved it: its keel WAS one connected mesh, and it
+// printed as four parts, because the base's members met over 0.13 and 0.03 mm — real in the
+// mesh, invisible to a 0.4 mm nozzle. decompose() can never see that; weldCheck() below can.
+// Slicing the part and linking eroded sections was the wrong instrument: on a dome, two
+// sections 3 mm apart simply don't overlap, and it cried wolf about the shell's whole cap.
+// This is the real test. Intersect the part with itself nudged 0.2 mm in eight compass
+// directions: that erodes it horizontally, which is the only direction that matters to a
+// nozzle, and leaves connectivity to decompose(). Any neck narrower than ~0.4 mm in plan
+// falls apart; nothing that is genuinely one wall does, however it slopes.
+function weldCheck(man, erode = 0.2) {
+  try {
+    let r = man;
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4;
+      r = r.intersect(man.translate([erode * Math.cos(a), erode * Math.sin(a), 0]));
+    }
+    // Eroding sheds crumbs wherever two coincident faces meet — bodies of a few thousandths
+    // of a mm³, which are an artifact of the measurement and not something a slicer prints.
+    // Only bodies over 10 mm³ count; below that nothing is at risk of ending up loose.
+    const big = r.decompose().map(m => ({ v: m.volume(), b: m.boundingBox() }))
+      .filter(o => o.v > 10).sort((p, q) => q.v - p.v);
+    return { parts: big.length, z0: man.boundingBox().min[2], loose: big.slice(1) };
+  } catch (e) { return null; }
+}
+async function runAudit() {
+  const btn = document.getElementById('bAudit');
+  try {
+    await runAuditInner(btn);
+  } catch (err) {
+    report.innerHTML = '<span class="bad">audit crashed: ' + err.message + '</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+// yield to the compositor between phases. A backgrounded tab clamps setTimeout to
+// ~1/s, so a per-part await left the report frozen on "checking meshes…" — race a
+// MessageChannel tick against it and take whichever fires first.
+const tick = () => new Promise(res => {
+  let done = false;
+  const fin = () => { if (!done) { done = true; res(); } };
+  const ch = new MessageChannel();
+  ch.port1.onmessage = fin; ch.port2.postMessage(0);
+  setTimeout(fin, 0);
+});
+async function runAuditInner(btn) {
+  btn.disabled = true; report.className = ''; report.textContent = 'checking meshes…';
+  await tick();
+  const lines = []; let allGood = true;
+  const fit = plateFit();
+  for (const pt of PARTS) {
+    const t = topology(pt.print), gaps = emptyLayers(pt.print), f = printStats(pt.print);
+    const pieces = pt.print.decompose().length;
+    const weld = weldCheck(pt.print);
+    const bad = [
+      t.nonManifold ? t.nonManifold + ' non-manifold' : null,
+      t.open ? t.open + ' open' : null,
+      t.badWinding ? t.badWinding + ' misturned' : null,
+      gaps.length ? gaps.length + ' empty band' + (gaps.length > 1 ? 's' : '') : null,
+      pieces > 1 ? pieces + ' loose pieces' : null,
+      weld && weld.parts > 1 ? 'sub-nozzle weld — eroded 0.2 mm horizontally it falls into ' +
+        weld.parts + ' bodies, so whatever joins them is narrower than one 0.4 mm extrusion ' +
+        'and the slicer will print them loose: ' + weld.loose.map(s =>
+          (s.v / 1000).toFixed(2) + ' cm³ at print z' + (s.b.min[2] - weld.z0).toFixed(1) + '–' +
+          (s.b.max[2] - weld.z0).toFixed(1) + ', x' + s.b.min[0].toFixed(0) + '…' +
+          s.b.max[0].toFixed(0) + ', y' + s.b.min[1].toFixed(0) + '…' + s.b.max[1].toFixed(0)
+        ).join(' · ') : null,
+    ].filter(Boolean);
+    if (bad.length) allGood = false;
+    const advice = [
+      t.dupes > 40 ? t.dupes + ' coincident verts' : null,
+      f.bed < 200 ? f.bed.toFixed(0) + ' mm² first layer — brim' : null,
+      f.worst > 45 ? 'supports: ' + f.worst.toFixed(0) + ' mm² cantilevered at z' + f.wz.toFixed(0) +
+        (f.where ? ' (x ' + f.where.min[0].toFixed(0) + '…' + f.where.max[0].toFixed(0) +
+          ', y ' + f.where.min[1].toFixed(0) + '…' + f.where.max[1].toFixed(0) + ')' : '') : null,
+    ].filter(Boolean);
+    const b = pt.print.boundingBox();
+    const dims = [0, 1, 2].map(i => (b.max[i] - b.min[i]).toFixed(0)).join(' × ');
+    lines.push('<span class="hd">' + pt.file + '</span>\n  ' + dims + ' mm · ' +
+      t.nTri + ' tri · ' + (t.volume / 1000).toFixed(1) + ' cm³\n  ' +
+      (bad.length ? '<span class="bad">' + bad.join(' · ') + '</span>' +
+        (gaps.length ? '\n  ' + gaps.map(g => g[0].toFixed(1) + '–' + g[1].toFixed(1) + ' mm').join('\n  ') : '')
+        : '<span class="ok">watertight · closed · no empty layers</span>') +
+      (advice.length ? '\n  <span class="warn">' + advice.join('\n  ') + '</span>' : ''));
+    report.innerHTML = lines.join('\n\n') + '\n\n<span class="mut">…' + (PARTS.length - lines.length) + ' parts to go</span>';
+    await tick();
+  }
+  report.innerHTML = lines.join('\n\n') + '\n\n<span class="hd">clearances…</span>';
+  await tick();
+  const clashes = [];
+  const intended = [];
+  let n = 0;
+  for (const [a, b] of CLASH_PAIRS) {
+    try {
+      const v = Manifold.intersection(CLASH_SOLIDS[a], CLASH_SOLIDS[b]).volume();
+      // v5.5: keel∩jetson is no longer required to be zero. The kit is pressed between the
+      // bay-floor pads and the head band on purpose, so this pair carries a BUDGET instead of
+      // a zero — over it is a clash, under it is the press fit, and either way the number is
+      // printed. An interference that is designed has to be measured, not exempted (§7.15).
+      if (a === 'keel' && b === 'jetson') {
+        if (v > PRESS_FIT_BUDGET) {
+          clashes.push('keel ∩ jetson = ' + v.toFixed(1) + ' mm³ — over the ' +
+            PRESS_FIT_BUDGET + ' mm³ press-fit budget. The kit is meant to squeeze into the ' +
+            'head band; this is more than the 0.33 mm of squeeze accounts for.');
+        } else {
+          intended.push('keel ∩ jetson = ' + v.toFixed(1) + ' mm³ of INTENDED interference — ' +
+            'the press fit, budget ' + PRESS_FIT_BUDGET + ' mm³. The kit stands ' + KIT_LIFT +
+            ' mm above PAN_TOP on four crush pads and squeezes 0.33 mm into the head plate\u2019s ' +
+            'underside — a 35 mm line at y -11.5, ~2.4 mm wide at this squeeze. Nominal kit ' +
+            'height 103.0 — MEASURE YOURS: ±0.4 on it is the whole joint, and KIT_LIFT is the ' +
+            'one constant that corrects it.');
+        }
+      } else if (v > 0.5) {
+        clashes.push(a + ' ∩ ' + b + ' = ' + v.toFixed(1) + ' mm³');
+      }
+    } catch (err) {
+      clashes.push(a + ' ∩ ' + b + ' — check failed: ' + err.message);
+    }
+    if (++n % 6 === 0) {
+      report.innerHTML = lines.join('\n\n') + '\n\n<span class="hd">clearances… ' +
+        n + '/' + CLASH_PAIRS.length + '</span>';
+      await tick();
+    }
+  }
+  const clashLine = clashes.length
+    ? '<span class="bad">' + clashes.join('\n') + '</span>'
+    : '<span class="ok">' + CLASH_PAIRS.length + ' pairs checked (parts + Jetson/plug/camera ghosts) — no unintended interference.' +
+      (intended.length ? '\n' + intended.join('\n') : '') + '</span>';
+  if (clashes.length) allGood = false;
+  const bore = boreFit();
+  const boreBad = bore.filter(b => !b.ok);
+  if (boreBad.length) allGood = false;
+  const boreLine = boreBad.length
+    ? '<span class="bad">' + boreBad.map(b => b.k + ' reaches r' + b.r.toFixed(2) +
+        ' at z' + b.z.toFixed(0) + ' — will not pass the Ø' + ((b.lim || BORE_R) * 2).toFixed(1) +
+        (b.lim ? ' arc slot' : ' bore')).join('\n') + '</span>'
+    : '<span class="ok">sub-assembly passes the Ø' + (BORE_R * 2).toFixed(1) + ' bore — widest is ' +
+        bore.filter(b => !b.lim).reduce((a, b) => b.r > a.r ? b : a).k + ' at r' +
+        bore.filter(b => !b.lim).reduce((a, b) => b.r > a.r ? b : a).r.toFixed(2) + '.\n' +
+        'Lugs reach r' + bore.find(b => b.lim).r.toFixed(2) + ' — outside the bore ON PURPOSE, ' +
+        'inside the r' + LUG_SLOT_R.toFixed(1) + ' arc slot they run in. Merging the puck into the ' +
+        'keel (v5.4) put them on this part; they are measured against the slot, not the bore.</span>';
+  const paths = assemblyPaths();
+  const pathOK = paths.boardHit < 1 && paths.clampHit < 1 && paths.compHit < 1;
+  const tight = paths.conns[0];
+  if (!pathOK) allGood = false;
+  const pathLine = '<span class="' + (pathOK ? 'ok' : 'bad') + '">' +
+    'board slid in along the eye axis — 37 × 37 board, Ø26 holder and a 30 × 30 × 12 heatsink/cable ' +
+    'envelope, swept 70 mm: ' + paths.boardHit.toFixed(1) + ' mm³ against the keel.\n' +
+    'clamp dropped down the channel — plate swept 45 mm (barbs excluded, they are the snap): ' +
+    paths.clampHit.toFixed(1) + ' mm³.\n' +
+    'There is no path from ABOVE and there never will be: the heatsink and both cables stand off the ' +
+    'board’s back face and would have to pass down through 9 mm of head plate. Front-loading only.\n' +
+    'WHAT HOLDS IT: the board is pinched between the seat frame behind (' +
+    (paths.seatArea).toFixed(0) + ' mm² of head plate around the ' + WIN_W + ' × ' + WIN_H +
+    ' window — 2.5 mm down each side, 2.0 top and bottom, less a 23 mm notch for J1) and the ' +
+    'clamp’s two 2.0 mm pads in front, which sit directly over the side strips. Rails at the ' +
+    'sides, ledge below, lips above.\n' +
+    'Pads squash the board ' + paths.squash.toFixed(1) + ' mm at the nominal ' + BOARD_T +
+    ' mm board — 0.1 mm at 1.4, 0.5 mm at 1.8, with 0.2 mm of clamp float to the lip; barbs deflect ' +
+    '0.6 mm on the way down and lock in the rail pockets.\n' +
+    'Front-face components: the plate body stands ' + paths.frontGap.toFixed(1) +
+    ' mm off a nominal board (1.1 mm off a 1.8 mm one) and nothing but the pads touches it — ' +
+    'a 1.1 mm-tall envelope over the whole front face except the outer 2 mm and the holder hits ' +
+    paths.compHit.toFixed(1) + ' mm³.\n' +
+    'Connectors through the ' + WIN_W + ' × ' + WIN_H + ' window, computed off the window and ' +
+    'its two reliefs — tightest is ' + tight.id + ' at ' + tight.min.toFixed(2) + ' mm:\n' +
+    paths.conns.map(c => '  ' + c.id + ' — side ' + c.side.toFixed(2) + ', top ' +
+      c.top.toFixed(2) + ', bottom ' + c.bot.toFixed(2)).join('\n') + '\n' +
+    'That top figure is what bridge droop spends: the window roof is a ' + WIN_W +
+    ' mm bridge tilted 8.6°, and slicers mis-detect sloped bridges. Check the preview.' +
+    '</span>';
+  const camW = bore.find(b => b.k === 'camera');
+  // The focus ghost is exempt from boreFit (it must NOT be extended during insertion),
+  // so its radius is reported here explicitly — otherwise a lens diameter change moves
+  // it silently, which is exactly what happened at Ø15 → Ø24.
+  const fx = maxRadius(CLASH_SOLIDS.focus);
+  // What the 100° field actually demands of the hole, at the recess we have. A round
+  // hole must cover the DIAGONAL half-angle in every direction; the sensor is 4:3, so
+  // the field is wider than it is tall and a capsule hole (the shape the visor already
+  // is) covers it with far less rim eaten.
+  const t = d => Math.tan(d * Math.PI / 360);
+  // THE RECESS IS NOT -TIP_S. s=0 is eyeC, which sits UNDER the skin: the tile's outer
+  // face crosses the eye axis at s+3.5, and its lower rim — pushed further out by the
+  // 8.6° eye tilt — at s+5.6. Measuring from s=0 understated the optical distance by
+  // 3.5 mm and printed "no vignetting" for a field that loses a third of its pupil in
+  // the bottom corner. Both planes are measured off the built bezel, not assumed.
+  // Re-derived from the BUILT bezel, not assumed: probing the tile in the eye frame puts
+  // its outer face at s+5.65 at the aperture's lower rim and s−0.08 at the upper rim, so
+  // the face crosses the eye axis at s≈2.8 — not the 3.5 this used to hardcode. That is
+  // 0.7 mm of optimism removed; recRim was already right.
+  const TILE_S = 2.8, RIM_S = 5.65;
+  const rec = TILE_S - TIP_S, recRim = RIM_S - TIP_S, g = APER_D / 2;
+  // need = the hole that would let the WHOLE Ø17 pupil through at the field edge.
+  // crop = the hole below which the field itself is cut (chief ray, pupil ignored).
+  const need = { rnd: g + recRim * t(FOV_DEG), w: g + recRim * t(FOV_DEG) * 0.8, h: g + recRim * t(FOV_DEG) * 0.6 };
+  const crop = { w: recRim * t(FOV_DEG) * 0.8, h: recRim * t(FOV_DEG) * 0.6 };
+  const camZ = maxRadius(CLASH_SOLIDS.camera).z;
+  const brdZ = maxRadius(camGhost).z;
+  window.__fit = { lensD: LENS_D, ap: LENS_R * 2, camR: camW.r, camZ, brdZ,
+    focusR: fx.r, focusZ: fx.z, bore: BORE_R, rec, recRim, need, crop };
+  const apOK = APER_HW >= crop.w && APER_HH >= crop.h;
+  // 5. THE VISOR SLEEVE, MEASURED. Thinnest member on the robot, and for two versions its
+  //    0.70 mm lived only in prose next to a clearance figure (0.19/0.116) that the built
+  //    solid did not agree with — §7.7 exactly. Both are read off `bezel` now: the wall from
+  //    a 2 mm slab through the sleeve at s-9, the gap by walking the tile along du until it
+  //    touches the holder. Change SLEEVE_RELIEF, HOLDER_R or APER_HH and this line moves.
+  const duSpan = m => { const g = m.getMesh(), v = g.vertProperties, n = g.numProp;
+    let lo = 1e9, hi = -1e9;
+    for (let i = 0; i < v.length; i += n) {
+      const d = (v[i] - eyeC[0]) * u3[0] + (v[i + 1] - eyeC[1]) * u3[1] + (v[i + 2] - eyeC[2]) * u3[2];
+      if (d < lo) lo = d; if (d > hi) hi = d;
+    }
+    return hi - lo; };
+  const sleeveBits = Manifold.intersection(bezel, eyeBox(2, 80, 1.5, -9))
+    .decompose().filter(p => p.volume() > 0.01).map(duSpan);
+  const sleeveWall = sleeveBits.length ? Math.min(...sleeveBits) : 0;
+  let sleeveGap = 1.2;
+  for (let d = 0.05; d <= 1.2; d += 0.05) {
+    if (Manifold.intersection(bezel.translate([u3[0] * d, u3[1] * d, u3[2] * d]),
+        CLASH_SOLIDS.camera).volume() > 0.001) { sleeveGap = d; break; }
+  }
+  const sleeveOK = sleeveWall >= 0.78 && sleeveGap - 0.15 >= 0.2;
+  const sleeveTxt = 'Visor sleeve over the Ø26 holder: <b>' + sleeveWall.toFixed(2) +
+    ' mm</b> of wall (measured at s-9) and <b>' + sleeveGap.toFixed(2) +
+    ' mm</b> of du clearance to the holder, ' + (sleeveGap - 0.15).toFixed(2) +
+    ' with the keel at the far end of its ±0.15 mm du float. ' + (sleeveWall >= 0.78
+      ? 'Two 0.40 mm lines — no per-part line-width override.'
+      : 'UNDER 0.78 — one 0.4 line plus gap fill; this part needs a 0.35 mm line-width override, ' +
+        'which cannot be applied if the visor is imported as one object among many.');
+  const camLine = '<span class="' + (apOK ? 'ok' : 'bad') + '">Ø' + LENS_D + ' lens, Ø' + APER_D +
+    ' optic, ' + FOV_DEG + '° field · aperture ' + (APER_HW * 2).toFixed(1) + ' × ' +
+    (APER_HH * 2).toFixed(1) + ' capsule · recess ' + rec.toFixed(1) + ' mm on the axis, ' +
+    recRim.toFixed(1) + ' at the tile’s lower rim.\n' +
+    (apOK ? 'Field NOT clipped' : 'FIELD CLIPPED') + ' — the chief ray needs ' +
+    (crop.w * 2).toFixed(1) + ' × ' + (crop.h * 2).toFixed(1) + '. The whole Ø' + APER_D +
+    ' pupil would need ' + (need.w * 2).toFixed(1) + ' × ' + (need.h * 2).toFixed(1) +
+    ' (round: Ø' + (need.rnd * 2).toFixed(1) + ') — no hole in a 33 mm tile gives that, so the ' +
+    'corners lose light: ray-traced pupil throughput at the ' + FOV_DEG +
+    '° corners is 63% bottom / 91% top, ≈ 0.7 EV of falloff.\n' +
+    (RING_R - HOLDER_R).toFixed(1) + ' mm of ring-cut clearance over the Ø26 holder (0.9 mm at the ' +
+    'staple\u2019s arms, which is the real minimum) · camera stack widest at r' +
+    camW.r.toFixed(1) + ', ' + (BORE_R - camW.r).toFixed(1) +
+    ' mm inside the bore radius — checked as a RADIUS against r' + BORE_R.toFixed(0) +
+    ', which is the twist-lock bore, NOT the shell\u2019s local inner wall.\n' +
+    'Focus racked OUT the barrel reaches r' + fx.r.toFixed(1) + ' at z' + fx.z.toFixed(0) + ' — ' +
+    Math.abs(fx.r - BORE_R).toFixed(1) + ' mm ' + (fx.r > BORE_R
+      ? 'OUTSIDE the bore radius — it MUST be racked in before insertion.'
+      : 'inside the bore radius, so it passes the bore either way — but RACK IT IN ANYWAY. ' +
+        'The shell\u2019s inner radius at the eye pad (z181–185) is 49.0, not 50, and a swept-volume ' +
+        'check of the 18° twist finds 7.5 mm³ of the racked-out barrel against it. A radius test ' +
+        'against r50 cannot see that; neither this line nor the RADIUS check above clears the twist.') +
+    '\n<span class="' + (sleeveOK ? 'ok' : 'bad') + '">' + sleeveTxt + '</span></span>';
+  report.innerHTML = lines.join('\n\n') + '\n\n<span class="hd">assembly clearance</span>\n' + clashLine +
+    '\n\n<span class="hd">passage through the bottom bore</span>\n' + boreLine +
+    '\n\n<span class="hd">assembly paths (swept)</span>\n' + pathLine +
+    '\n\n<span class="hd">camera fit</span>\n' + camLine + '\n\n' +
+    (fit.length ? '<span class="bad">' + fit.join('\n') + '</span>\n\n' : '') +
+    (allGood && !fit.length ? '<span class="ok">All ' + PARTS.length + ' parts print as-is.</span>'
+                            : '<span class="bad">Defects remain — do not print.</span>');
+}
+
+// ============ export ============
+function save(data, name, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = document.createElement('a'); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+function stlBinary(man) {
+  const m = man.getMesh(), np = m.numProp, vp = m.vertProperties, tv = m.triVerts;
+  const nt = tv.length / 3;
+  const dv = new DataView(new ArrayBuffer(84 + nt * 50));
+  dv.setUint32(80, nt, true);
+  let o = 84;
+  for (let t = 0; t < nt; t++) {
+    const a = tv[t * 3] * np, b = tv[t * 3 + 1] * np, c = tv[t * 3 + 2] * np;
+    const ux = vp[b] - vp[a], uy = vp[b + 1] - vp[a + 1], uz = vp[b + 2] - vp[a + 2];
+    const wx = vp[c] - vp[a], wy = vp[c + 1] - vp[a + 1], wz = vp[c + 2] - vp[a + 2];
+    let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    const L = Math.hypot(nx, ny, nz) || 1; nx /= L; ny /= L; nz /= L;
+    dv.setFloat32(o, nx, true); dv.setFloat32(o + 4, ny, true); dv.setFloat32(o + 8, nz, true); o += 12;
+    for (const i of [a, b, c]) {
+      dv.setFloat32(o, vp[i], true); dv.setFloat32(o + 4, vp[i + 1], true); dv.setFloat32(o + 8, vp[i + 2], true);
+      o += 12;
+    }
+    dv.setUint16(o, 0, true); o += 2;
+  }
+  return dv.buffer;
+}
+async function downloadSTLs() {
+  for (const pt of PARTS) {
+    save(stlBinary(pt.print), pt.file + '.stl', 'model/stl');
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+function download3MF(plateIdx) {
+  const mine = PARTS.filter(pt => pt.plate === plateIdx);
+  const f = v => Number(v.toFixed(4)).toString();
+  let res = '', items = '';
+  mine.forEach((pt, n) => {
+    const m = pt.print.getMesh(), np = m.numProp, vp = m.vertProperties, tv = m.triVerts;
+    const id = n + 1, v = [], t = [];
+    for (let i = 0; i < m.numVert; i++)
+      v.push('<vertex x="' + f(vp[i * np]) + '" y="' + f(vp[i * np + 1]) + '" z="' + f(vp[i * np + 2]) + '"/>');
+    for (let i = 0; i < tv.length; i += 3)
+      t.push('<triangle v1="' + tv[i] + '" v2="' + tv[i + 1] + '" v3="' + tv[i + 2] + '"/>');
+    res += '<object id="' + id + '" type="model" name="' + pt.file + '"><mesh><vertices>' +
+      v.join('') + '</vertices><triangles>' + t.join('') + '</triangles></mesh></object>';
+    items += '<item objectid="' + id + '" transform="1 0 0 0 1 0 0 0 1 ' +
+      f(pt.at[0] + BED / 2) + ' ' + f(pt.at[1] + BED / 2) + ' 0"/>';
+  });
+  const model = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+    '<metadata name="Application">L6 bot v5.4 enclosure generator</metadata>' +
+    '<resources>' + res + '</resources><build>' + items + '</build></model>';
+  const zip = zipSync({
+    '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
+    '_rels/.rels': strToU8('<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rel0" Target="/3D/3dmodel.model" ' +
+      'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
+    '3D/3dmodel.model': strToU8(model),
+  }, { level: 6 });
+  save(zip, PLATES[plateIdx].file + '.3mf', 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml');
+}
+// Everything that goes UP through the shell's bore must live inside r50 about the body axis.
+// v5.4: the three twist-lock lugs are now on the KEEL (the puck is merged into it), and they
+// live outside r49.5 on purpose — they ride the entry channels cut into the bore wall. So the
+// keel is measured for the bore rule ABOVE the lug band only, and the lugs are measured on
+// their own against the arc slot they actually run in. Exempting them by leaving the part out
+// of the list, as v5 did with the puck, would now exempt the entire cradle.
+const BORE_R = 50.0;
+const LUG_TOP = 43.6, LUG_SLOT_R = 52.1;
+function maxRadius(man) {
+  const m = man.getMesh(), np = m.numProp, vp = m.vertProperties;
+  let best = 0, bz = 0;
+  for (let i = 0; i < m.numVert; i++) {
+    const r = Math.hypot(vp[i * np], vp[i * np + 1]);
+    if (r > best) { best = r; bz = vp[i * np + 2]; }
+  }
+  return { r: best, z: bz };
+}
+function boreFit() {
+  const out = [];
+  for (const k of ['keel', 'clamp', 'jetson', 'camera']) {
+    const solid = k === 'keel'
+      ? Manifold.intersection(CLASH_SOLIDS.keel, cube(200, 200, 400, 0, 0, LUG_TOP + 200))
+      : CLASH_SOLIDS[k];
+    const { r, z } = maxRadius(solid);
+    out.push({ k: k === 'keel' ? 'keel (above z' + LUG_TOP + ')' : k, r, z, ok: r <= BORE_R });
+  }
+  const lug = maxRadius(Manifold.intersection(
+    CLASH_SOLIDS.keel, cube(200, 200, 400, 0, 0, LUG_TOP - 200)));
+  out.push({ k: 'twist-lock lugs', r: lug.r, z: lug.z, ok: lug.r <= LUG_SLOT_R, lim: LUG_SLOT_R });
+  return out;
+}
+// ============ ASSEMBLY PATHS — swept, not static ============
+// The audit checks the assembled state. Every assembly fault this design has had was
+// invisible there: the board could not reach the tray, the clamp could not reach its
+// detents, the barrel fouled the eye pad mid-twist. Sweep the motion as a volume.
+function assemblyPaths() {
+  const mul = (v, k) => [v[0] * k, v[1] * k, v[2] * k];
+  const swept = (m, dir, d) => Manifold.union([m, m.translate(mul(dir, d))]).hull();
+  // 1. the camera module goes in along the eye axis, from the front. Swept OUT (+s) 70 mm.
+  //    The heatsink envelope is deliberately bigger than the ghost: 30 × 30 × 12 is what a
+  //    real sink plus a plugged-in cable occupies, and it has to clear the 32 × 33.0 window.
+  const board = Manifold.union([
+    eyeBox(BOARD, BOARD, BOARD_T, S_BB + BOARD_T / 2),
+    eyeBox(30, 30, 12, S_BB - 6),
+    eyeCyl(HOLDER_R, LENS_0, S_BF + LENS_0 / 2, 48),
+  ].map(p => swept(p, d3, 70)));
+  // 2. the clamp drops down the channel (-du). Its barbs are excluded: they are the snap,
+  //    and their 0.6 mm of designed interference would otherwise read as a collision.
+  const plate = Manifold.intersection(clamp, eyeBox(37.02, 200, 40, CLAMP_S + CLAMP_T / 2));
+  // 3. front-face component envelope: everything the clamp crosses that is NOT the outer
+  //    2 mm border and NOT the lens holder. 1.1 mm tall off a WORST-CASE 1.8 mm board, so
+  //    this is the real headroom a soldered part has under the plate. Must be 0.
+  const comps = Manifold.difference(
+    eyeBox(32.8, 35, 1.1, S_BB + 1.8 + 0.55),
+    eyeCyl(RING_R, 40, S_BF + 10, 48));
+  const seatFrame = Manifold.intersection(
+    eyeBox(BOARD, BOARD, 1.0, S_BB - 0.5),
+    camHead);
+  // 4. CONNECTOR CLEARANCES, COMPUTED. The guide quoted J2 "2.75 mm of top clearance" for
+  //    three versions after WIN_H went 36.8 → 33.0 and made it 0.8 — a hand-carried number
+  //    that no check owned. The clash matrix could not see it either: 0.8 mm of air passes a
+  //    static intersection test and then a drooped bridge closes it. Derive it from the
+  //    window and its two reliefs, print the worst one, and it cannot drift again.
+  const ROOF_DU = 17.5, ROOF_DX = 9.1;      // J2 relief: eyeBox(18.2, 1.5, …, +16.75)
+  const FLOOR_DU = -17.8, FLOOR_DX = 11.5;  // J1 relief: eyeBox(23.0, 2.2, …, -16.7)
+  const conns = CONNS.map(c => {
+    const side = WIN_W / 2 - c.dx;
+    const top = (c.dx <= ROOF_DX ? ROOF_DU : WIN_H / 2) - c.du1;
+    const bot = c.du0 - (c.dx <= FLOOR_DX ? FLOOR_DU : -WIN_H / 2);
+    return { id: c.id, side, top, bot, min: Math.min(side, top, bot) };
+  }).sort((a, b) => a.min - b.min);
+  return {
+    boardHit: Manifold.intersection(board, keel).volume(),
+    clampHit: Manifold.intersection(swept(plate, u3, 45), keel).volume(),
+    compHit: Manifold.intersection(comps, clamp).volume(),
+    frontGap: CLAMP_S - (S_BB + BOARD_T),
+    squash: (S_BB + BOARD_T) - (CLAMP_S - PAD_T),
+    seatArea: seatFrame.volume(),
+    conns,
+  };
+}
+function plateFit() {
+  const issues = [];
+  for (const pt of PARTS) {
+    const b = pt.print.boundingBox();
+    for (const i of [0, 1]) {
+      const lo = pt.at[i] + b.min[i] + BED / 2, hi = pt.at[i] + b.max[i] + BED / 2;
+      if (lo < 2 || hi > BED - 2) issues.push(pt.file + ' off the bed');
+    }
+  }
+  for (let i = 0; i < PARTS.length; i++) for (let j = i + 1; j < PARTS.length; j++) {
+    const a = PARTS[i], c = PARTS[j];
+    if (a.plate !== c.plate) continue;
+    const ab = a.print.boundingBox(), cb = c.print.boundingBox();
+    const hit = [0, 1].every(k =>
+      a.at[k] + ab.min[k] < c.at[k] + cb.max[k] + 2 && c.at[k] + cb.min[k] < a.at[k] + ab.max[k] + 2);
+    if (hit) issues.push(a.file + ' overlaps ' + c.file);
+  }
+  return issues;
+}
+
+// ============ wiring ============
+const views = { asm: assembled(), plate: printPlate() };
+const bA = document.getElementById('bAsm'), bP = document.getElementById('bPlate');
+const bG = document.getElementById('bGhost');
+function show(which) {
+  stage.setObject(views[which]);
+  bA.classList.toggle('on', which === 'asm');
+  bP.classList.toggle('on', which === 'plate');
+}
+bA.onclick = () => show('asm');
+bP.onclick = () => show('plate');
+bG.onclick = () => { ghostGroup.visible = !ghostGroup.visible; bG.classList.toggle('on', ghostGroup.visible); };
+document.getElementById('bAudit').onclick = runAudit;
+document.getElementById('b3mfC').onclick = () => download3MF(0);
+document.getElementById('b3mfW').onclick = () => download3MF(1);
+document.getElementById('b3mfR').onclick = () => download3MF(2);
+// Derived, not typed. The label read "9 STLs" through v5.4's merge — §7.7's failure mode on a
+// control the user clicks, which is worse than a stale comment.
+document.getElementById('bStl').textContent = PARTS.length + ' STLs';
+document.getElementById('bStl').onclick = downloadSTLs;
+window.__dbg = { Manifold, PARTS, PLATES, topology, emptyLayers, plateFit, CLASH_SOLIDS,
+  at, eyeBox, eyeCyl, eyeRot, d3, u3, eyeC, S_BB, S_BF, S_HEAD, RAIL_H, BOARD, BOARD_T, HOLDER_R, RING_R, LENS_0 };
+document.getElementById('boot').remove();
+show('asm');
+setTimeout(runAudit, 200);
+</script>
+</body>
+</html>

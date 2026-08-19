@@ -5,5 +5,4 @@ edge-data*/
 *.pt
 *.log
 cert/
-
-PITCH.md
+.DS_Store

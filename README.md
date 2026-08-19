@@ -1,6 +1,6 @@
 # l6-robot
 
-![Memory robot concept](assets/robot-concept.png)
+![L6 robot](assets/robot-render.gif)
 
 `l6-robot` is the instructor demo for L6 of **Building On-Device AI Memory with Qdrant Edge**. It is a frozen, course-sized snapshot of [qdrant-labs/memory-fleet](https://github.com/qdrant-labs/memory-fleet), trimmed to show one clear loop:
 
@@ -372,27 +372,22 @@ The second command measures what the robot *wants* to send, over loopback, with 
 | `deploy/` | `headless-setup.sh` and the systemd unit that make it an appliance |
 | `REMOTE-ACCESS.md` | Getting a shell on the headless unit, and moving it between Wi-Fi networks |
 | `testdata/` | Replay fixtures, plus `verify_scores.py` for calibration |
+| `hardware/` | The enclosure: print files, the model that makes them, and the build spec |
+| `BOM.md` | What to buy, and what the camera has to measure |
 
 Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.
 
 ## Hardware
 
-The intended hardware is a single demo unit: a frosted, grapefruit-sized shell with a Jetson inside, one USB camera, and a small addressable LED field. It is a filming and booth prop, not a consumer device.
+One demo unit: a 130 x 190 mm printed shell with a Jetson standing on edge inside it, one USB camera behind the eye, and an antenna on top. It is a filming and booth prop, not a consumer device.
 
-High-level design:
+- **Jetson Orin Nano Super 8 GB**, low in the shell, where its weight keeps the robot upright.
+- **A 37 x 37 mm USB (UVC) camera** as the eye. The printed tray is cut to that size, so measure yours before printing. [BOM.md](BOM.md) has the limits.
+- **No microphone, speaker, or screen.** Your phone browser is the whole interface.
+- **Six printed parts, no screws.** A twist lock, two snap clips, one zip tie, and a drop of glue on the visor.
 
-- Jetson Orin Nano Super 8 GB inside the base
-- UVC USB camera as the front "eye"
-- APA102/DotStar LEDs driven from the Jetson SPI header
-- No built-in mic, speaker, or screen; your phone browser is the interface
-- Spoken answers use macOS `say`; the Jetson has no audio hardware, so the answer is shown on the panel instead — the same sentence it would have spoken. Add `espeak` and a small USB speaker if you want it out loud
+Spoken answers use macOS `say`. The Jetson has no audio hardware, so there the answer is shown on the panel instead, the same sentence it would have spoken. Add `espeak` and a small USB speaker if you want it out loud.
 
-The full parts list, prices, build tiers, and Jetson port notes are in [BOM.md](BOM.md).
+A Raspberry Pi 5 (8/16 GB) with a USB webcam should run the software, but CPU-only inference makes it slow and the detector needs its own tuning. It is not a tested target and it does not fit this shell.
 
-## Build Tiers
-
-**Full build: Jetson Orin Nano Super 8 GB.** The default target. It has CUDA headroom for the detector and the rest of the memory stack.
-
-A Raspberry Pi 5 (8/16 GB) + USB webcam is experimental only: it should run, but CPU-only inference makes it slow and the detector would need manual tuning.
-
-The build depends on detector-visible objects.
+**Parts and prices:** [BOM.md](BOM.md). **Printing and assembly:** [hardware/README.md](hardware/README.md).
