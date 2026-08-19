@@ -18,9 +18,9 @@ NOMIC_DIM = 768
 CLIP_VISION_MODEL = "Qdrant/clip-ViT-B-32-vision"
 CLIP_DIM = 512
 WHISPER_MODEL = "whisper-base"
-# CLIP's text tower is deliberately not here: searching the image space with
-# the words of a question was measured useless, and recall picks the object in
-# Nomic's text space instead. See "Recall" in CLAUDE.md before bringing it back.
+# CLIP's text tower is deliberately not here. Searching the image space with
+# the words of a question was measured useless, so recall picks the object in
+# Nomic's text space instead (see Memory.best_taught).
 
 # ONNX Runtime gives every session a thread per core and lets idle ones spin,
 # so the encoders the detect thread calls would starve the camera loop. Two
