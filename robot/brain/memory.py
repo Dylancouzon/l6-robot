@@ -392,8 +392,10 @@ class Memory:
         """The taught object whose transcript best matches a question.
 
         Recall's first step, and it searches the TEXT space: the question and
-        the transcript are both language, so they land near each other. See
-        "Recall" in CLAUDE.md for what searching the image space did instead.
+        the transcript are both language, so they land near each other.
+        Searching the IMAGE space with the words of a question was measured and
+        dropped: it put every sighting of a day into one flat band, so the
+        answer was whichever object had been seen most.
         """
         with self._lock:
             hits = self.shard.query(QueryRequest(
