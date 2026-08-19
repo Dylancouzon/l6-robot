@@ -23,13 +23,13 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_FILE, override=False)
 
 
-def _number(name, default, cast=float):
+def _number(name, default):
     """One calibration knob, with a legible error instead of a stack trace."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        return cast(raw)
+        return float(raw)
     except ValueError:
         raise SystemExit(
             f"{name} in {ENV_FILE.name} must be a number, got {raw!r}")

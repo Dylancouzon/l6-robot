@@ -50,6 +50,38 @@ Sixteen rounds of work are compressed here; the full narrative of each is in
 - The repo mirrors the course's helper.py: Nomic 768 (text), CLIP 512 vision
   (image), Whisper (speech). CLIP's text tower was deleted — see "Recall".
 
+## Layout, and the one rule that keeps it
+
+The package is split by what a reader is trying to understand:
+
+```
+robot/app.py            argparse, main, and headless replay
+robot/config.py         per-camera knobs, read from .env
+robot/brain/            what the course teaches
+  core.py               Robot: the loop, attention, teach/forget/ask
+  memory.py             Qdrant Edge: the shard, the threshold, recall
+  models.py             Nomic / CLIP / Whisper loaders
+  detect.py             YOLOE, tracking, the stability gate
+  labels.py             a spoken sentence -> an object's name
+robot/device/           camera, browser, microphone, hardware
+  live.py               LiveApp: the threads, the buttons, the voice path
+  server.py             HTTP routes, MJPEG stream, the certificate
+  page.html             the whole UI
+  mic.py                local microphone capture
+  draw.py               boxes drawn onto the feed
+```
+
+**`device` imports `brain`; `brain` never imports `device`.** That is the rule
+the split is worth anything for — it is what keeps `Robot` drivable by the
+headless replay, and what lets someone read the retrieval story without a
+camera, a socket or a thread in the way. `app.py` imports `LiveApp` lazily
+inside `main()` for the same reason: replay pulls in no device code at all.
+
+The page used to be a `bytes` literal inside `app.py`, which is why the old
+comments warn about ASCII-only source. It is a real file now, served whole and
+byte-identical, so that trap is gone — but keep the `\uXXXX` escapes in the JS
+rather than pasting characters, since nothing else guarantees the encoding.
+
 ## Repository state
 
 - `/home/qdrant/Documents/github/l6-robot`. PRs #1–#11 merged to `main`.
@@ -126,7 +158,7 @@ focus moves under a finger already on its way down.
 
 ## Detection, attention and the constants
 
-`robot/detect.py`, all field-tuned; each does one job and they are easy to
+`robot/brain/detect.py`, all field-tuned; each does one job and they are easy to
 confuse.
 
 | constant | value | what it decides |
@@ -137,7 +169,7 @@ confuse.
 | `STABLE_FRAMES` | 3 | passes before a track is displayed, embedded or teachable |
 | `REQUERY_SECONDS` | 2.0 | how often a stable track re-asks memory |
 | `DEAD_SECONDS` | 5.0 | how long a track survives with no detection **as itself** |
-| `FOCUS_MARGIN` | 1.6 (`core.py`) | attention hysteresis |
+| `FOCUS_MARGIN` | 1.6  (`brain/core.py`) | attention hysteresis |
 | `PAD` / `SCENE_PAD` | 0.12 / 0.3 | recognition crop margin / the human-facing picture's margin |
 
 Both area knobs are **areas**, so they move as the square of apparent size:
@@ -166,7 +198,7 @@ Both area knobs are **areas**, so they move as the square of apparent size:
   (median dwell 2.34 s); after, 0 in 120 s. Raising it makes focus harder to
   move *on purpose*, which is its own failure, and **nobody has measured a
   deliberate takeover at 1.6.** A dwell timer stays rejected: any hold gated on
-  candidacy is powerless against a blink (`focused` can only retain an
+  candidacy is powerless against a blink (`pick_focus` can only retain an
   incumbent still in the candidate list, which is stable tracks only), and a
   hold that returned a non-candidate would aim the panel and TEACH at an object
   with no box and a stale crop.
@@ -201,7 +233,7 @@ Both area knobs are **areas**, so they move as the square of apparent size:
 Whisper-base via onnx-asr, on CPU. **The teach beat is ~1.9 s warm**, and
 getting there took undoing two wrong beliefs, so read this before optimizing.
 
-- **`LANGUAGE = "en"` in `robot/models.py` halves every action.** This Whisper
+- **`LANGUAGE = "en"` in `robot/brain/models.py` halves every action.** This Whisper
   is the beam-search export: one ONNX graph holding the encoder *and* decoder.
   With no language given, `recognize_batch` runs that whole graph a **second
   time** just to read the language token. Measured on a real 2.1 s utterance:
@@ -363,10 +395,10 @@ the UI stuttered. It now captures and renders and **takes no lock at all**.
   scroll/delete/reopen.
 - **Never key attention state by `tid`.** `Detector.reset()` restarts tracker
   ids from 1, so a tid-keyed incumbent hands its focus to whatever unrelated
-  new track inherits the number — verified. `focused()` holds the `Track`
+  new track inherits the number — verified. `pick_focus()` holds the `Track`
   object, which makes the whole class impossible.
 - **A track holding focus must not be removed from the candidate list by a
-  display filter.** `focused` can only retain an incumbent that is still a
+  display filter.** `pick_focus` can only retain an incumbent that is still a
   candidate, so a filter that drops it bypasses `FOCUS_MARGIN` entirely and
   re-derives attention by raw salience over what is left — which can be a third
   object. Reproduced with stubs. `_one_per_label` keeps the incumbent's box for
@@ -510,6 +542,21 @@ restarts — and on the appliance there is only ever one address.
 
 ## Operational notes
 
+- **`sys.setswitchinterval(0.002)`** at the top of `LiveApp.run` is what keeps
+  the feed smooth while the detector runs. Python's default 5 ms lets a YOLO
+  pass hold the interpreter long enough to be visible in the video.
+- **The `objc.autorelease_pool` import in `detect.py` is a macOS memory leak
+  fix**, not decoration: torch-MPS autoreleases Metal objects per inference and
+  a plain Python loop never drains the pool (~80 MB/min). It falls back to
+  `nullcontext` everywhere else, so it costs the Jetson nothing.
+- **`record_wav` records at the device's native rate and resamples**, because
+  USB mics often refuse 16 kHz outright. ffmpeg/avfoundation was tried first
+  and could not open two different USB audio devices at all.
+- **`Memory.__init__` decides "is there a shard here?" by globbing**, ignoring
+  the two things the app itself puts beside the shard (`thumbs/`,
+  `where.txt`). Anything new written into the data dir has to join that
+  exclusion list, or a half-restored directory becomes a `load()` of nothing
+  that crashes every boot.
 - **The Jetson has no audio hardware.** The phone-browser hold-to-talk path is
   the only mic on the appliance; `sounddevice` stays a dependency for laptop
   use. `--host 0.0.0.0` serves HTTPS, which is what lets a phone grant mic
@@ -635,7 +682,7 @@ when it actually fires, and update this list when you do.
 - `startswith` routing depends on `/forget_view` preceding `/forget`.
 - `count_label` is exact-case while everything else case-folds — a cosmetic
   count, wrong only on unmigrated pre-lowercase shards.
-- `_one_per_label` reading `focused()`'s incumbent is the display-filter trap
+- `_one_per_label` reading `pick_focus()`'s incumbent is the display-filter trap
   above, enforced by prose rather than by code.
 - An undone ignore orphans its thumbnail (delete removes points, not files).
   5–15 KB on an NVMe.

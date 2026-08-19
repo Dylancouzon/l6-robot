@@ -1,46 +1,48 @@
 # l6-robot
 
-![L6 robot](assets/robot-render.gif)
+![The L6 robot: a printed shell with a camera behind its visor and an antenna on top](assets/robot-render.gif)
 
-`l6-robot` is the instructor demo for L6 of **Building On-Device AI Memory with Qdrant Edge**. It is a frozen, course-sized snapshot of [qdrant-labs/memory-fleet](https://github.com/qdrant-labs/memory-fleet), trimmed to show one clear loop:
+A robot that **sees an object, learns its name from your voice, and remembers where it saw it**. Everything runs on the Jetson Orin Nano: no cloud, no API key, no LLM. Recognition and recall are vector search over an embedded Qdrant Edge shard.
+
+This is the instructor demo for L6 of [Building On-Device AI Memory with Qdrant Edge](https://github.com/Dylancouzon/SC-Qdrant-C3), a DeepLearning.AI short course from Qdrant.
 
 ```text
 camera / mic -> detect -> embed -> match -> teach -> recall
 ```
 
-No LLM runs in this loop. Recognition and recall are vector search and retrieval, not generation.
+## What It Does
 
-This repo is not the living product repo. It is the version used for the lesson.
+**Point it at something and hold TEACH.** Say "this is my chair". The robot crops the object from the frame, embeds the crop with CLIP, embeds your sentence with Nomic, and writes one memory with both vectors.
 
-## What You Already Built
+**It recognizes the object from then on.** The panel names what it is looking at, shows the remembered view beside the live one, and compares the score with the recognition bar.
 
-Every stage of this loop comes from a lesson notebook. Two of them are new.
+<img src="assets/screens/recognize.png" alt="The phone view: a room with teal boxes reading dylan 0.91, chair 0.97, and keyboard 0.96, over a panel showing chair at 0.970 against a bar of 0.90" width="330">
 
-| Loop stage | Where it comes from |
-|---|---|
-| Mic to transcript | L4 |
-| Frame, embed, match against the threshold | L5 |
-| Store, recall, forget | L2 |
-| Cross-modal recall over photos, voice, and text | L3 and L4 |
-| One shard, two skills, offline | L5 |
-| Detect and crop objects in a cluttered frame | New here |
-| Deciding when a memory is worth writing | New here |
+**Everything it knows is browsable.** Each card holds the object's picture, the sentence you taught it with, and how many times it has been seen since. Rename fixes a misheard name without changing the vectors. Forget removes the object.
 
-The two new stages stay black boxes on purpose. A detector finds *a thing*; the memory layer decides *which* thing.
+<img src="assets/screens/memory.png" alt="The memory tab: cards for dylan, keyboard, chair, and smartphone, each with a photo, its taught sentence, a sighting count, and Rename and Forget buttons" width="330">
+
+**Ask where something is.** "When did you last see Dylan?" is matched against the sentence you taught it with. The robot answers with the last few times it saw the object, each with a time, a place, and the photo it took.
+
+<img src="assets/screens/recall.png" alt="A recall answer reading I saw dylan at 3:17 AM, in Dylan's room, before that at 2:42 AM and 2:21 AM, above the photos the robot took" width="330">
+
+**It can be taught from near misses.** An orange `hat? 0.87` box means the nearest taught object came close to the bar without clearing it. Tap the label to confirm it, and the robot learns that angle.
+
+**Power is the off switch.** Every memory is flushed to disk as it is written. Press `R` to close the shard, reload it from disk, and answer again from what is genuinely on the device.
 
 ## What It Runs
 
-- **Vector search:** Qdrant Edge `0.7.2` (embedded, on-device)
-- **Vectors:** `text` 768-dim Nomic v1.5 and `image` 512-dim CLIP ViT-B/32, both through FastEmbed
-- **Speech:** Whisper-base through `onnx-asr`
-- **Detection:** YOLOE prompt-free
-- **Recognition rule:** nearest taught view must meet `RECOGNIZE_THRESHOLD` (default `0.90`, per-camera — see [Calibrating For Your Camera](#calibrating-for-your-camera))
+| Piece | What |
+|---|---|
+| Vector search | Qdrant Edge 0.7.2, embedded, one shard on disk |
+| Vectors | `image` 512-dim CLIP ViT-B/32, `text` 768-dim Nomic v1.5, both through FastEmbed |
+| Speech | Whisper-base through `onnx-asr`, on CPU |
+| Detection | YOLOE prompt-free, with BoT-SORT tracking |
+| Recognition rule | nearest taught view must score at least `RECOGNIZE_THRESHOLD` |
 
-Detector labels are only used to crop objects. The memory layer decides what an object is.
+The detector's own class labels are thrown away. Detection finds *a thing*. Memory decides *which* thing, so the robot can learn an object no detector has a word for.
 
-YOLO weights download automatically through Ultralytics. You can also place `yoloe-11l-seg-pf.pt` in the repo root.
-
-## Run
+## Run It
 
 ```bash
 uv sync
@@ -48,346 +50,187 @@ cp .env.example .env
 uv run python -m robot.app
 ```
 
-The app opens a browser view at `http://127.0.0.1:8765`. To open the view from a phone or iPad instead, see [Phone Or Tablet Demo](#phone-or-tablet-demo). For the demo unit in its case — no keyboard, no screen, its own Wi-Fi, starts on power — see [Headless Appliance](#headless-appliance).
+That opens a browser view at `http://127.0.0.1:8765`. YOLO weights download on first run, along with about 1.5 GB of models.
 
-The defaults in `.env` are tuned for one specific camera. Read [Calibrating For Your Camera](#calibrating-for-your-camera) before you conclude that recognition is broken — the single most common symptom, everything in the room matching the last thing you taught, is a threshold that hasn't been calibrated.
-
-### Running On A Jetson Orin Nano
-
-The same two commands work. Four things are worth knowing on the 8 GB board:
-
-- **Torch prints a compute-capability warning** ("No published PyTorch CUDA builds ... support this GPU"). It is harmless: Orin is `sm_87` and executes the wheel's `sm_80` kernels. CUDA is genuinely in use — the detector runs at roughly 165 ms per frame at `imgsz=640`, against seconds per frame on CPU. Confirm with:
-
-  ```bash
-  uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-  ```
-
-- **Only the CLIP vision encoder loads at startup** (see `warm_up` in `robot/models.py`). Speech and text encoders load the first time you teach or ask. Loading everything up front needs about 3.3 GB before the camera even opens, which pushes the board into swap — and a swapping robot updates the view once every several seconds. Expect roughly 2.5 GB after startup and 4 GB once you have taught something.
-
-- **Keep the stock 15 W power mode.** The bottleneck here is memory and the USB camera, not the GPU, so `jetson_clocks` and MAXN buy nothing.
-
-- **"System throttled due to Over-current" will pop up repeatedly, and it is expected.** `OC3` counts *instantaneous* power spikes on `VDD_IN`, caught by a hardware comparator far too fast for the INA3221 sensor to sample — which is why `tegrastats` shows you nowhere near the limit while the counter climbs. Bursty GPU inference trips it; sustained draw here is about 1.9 A against a 4.05 A critical limit, CPU clocks hold at maximum, and per-frame detector latency stays flat. `OC1` and `OC2` (the averaged thresholds) stay at zero. NVIDIA describes the throttle as protective, not damage. Check the counters with:
-
-  ```bash
-  cat /sys/devices/platform/soctherm-oc-event/hwmon/hwmon*/oc?_event_cnt
-  ```
-
-  The popup comes from the nvpmodel tray applet, which polls those counters every second and re-fires while any of them increments. To stop the notifications without touching the hardware protection, either tick **Disable notification** in the tray menu (resets at login) or hide the applet's autostart entry:
-
-  ```bash
-  cp /etc/xdg/autostart/nvpmodel_indicator.desktop ~/.config/autostart/
-  echo "Hidden=true" >> ~/.config/autostart/nvpmodel_indicator.desktop
-  ```
+The values in `.env` are tuned for one specific camera. If recognition looks wrong, read [Calibrating For Your Camera](#calibrating-for-your-camera).
 
 ## Controls
 
 | Control | Action |
 |---|---|
 | `T` / hold **TEACH** | Teach the focused unknown object by voice |
-| `A` / hold **ASK** | Ask a voice question. "Where did I leave my hat?" answers with the last three times it saw the hat — time and place each — and "what did you see today?" lists the day's objects. |
-| `M` / **MEMORY** | Everything it knows, with pictures — and where you delete things |
-| `Q` / **IGNORE** | Dismiss the current unknown (clutter you won't teach) |
-| `F` | Delete what it knows about the focused recognized object — keyboard only |
-| `R` | Close the shard, reload from disk, then re-ask — keyboard only |
-| Ctrl-C | Quit (no on-screen quit, so a stray tap won't end the demo) |
+| `A` / hold **ASK** | Ask a question by voice |
+| `M` / **MEMORY** | Everything it knows, with pictures. Delete, rename, and un-ignore from here |
+| `Q` / **IGNORE** | Dismiss the current unknown, and keep it dismissed across restarts |
+| `F` | Forget the focused recognized object. Keyboard only |
+| `R` | Close the shard and reload it from disk. Keyboard only |
+| Ctrl-C | Quit. There is no on-screen quit, so a stray tap cannot end the demo |
 
-Every recognized object is drawn on screen, but **only one box per remembered object**. Teaching something two or three times is the recommended habit, and each taught view is a memory the detector's other boxes can match too — teach yourself twice and the person box, the face box and the torso box all come back with your name, so one memory is drawn three times over one person. The best match wins the box; the others keep tracking silently. The cost, accepted: two identical objects in frame — two of the same mug — show one box between them, because the robot has nothing to tell them apart with.
+**TEACH acts on the most prominent unknown object**, where prominent means large and near the center of the frame. To aim the robot, bring the object closer and hold it toward the middle. Focus is sticky: an object keeps the thick box until something is clearly more prominent, so a button press lands on the object you meant.
 
-Only the most prominent unknown object is teachable.
+Delete from the memory tab, where you can pick an object from a list and see its picture first. Camera-aimed deletion is keyboard-only because focus can move between deciding to press and pressing.
 
-Two controls have no button. `R` is a presenter's beat rather than a control — and a robot serving its own Wi-Fi with the internet unplugged already makes the point that the memories are local. Wiping everything is `--reset`, deliberately off the UI so a stray tap cannot erase a demo.
+## Teaching It Well
 
-`F` lost its button because **aiming a delete with the camera does not work**. It acts on whatever holds the box at the instant of the press, and focus can move between deciding to press and pressing — so the object that gets deleted is not always the one you were looking at. Deleting now lives in the **MEMORY** tab, where you pick the object out of a list and see its picture first. The key stays for filming: it is still the fastest way to show a delete, and a key is not something a thumb lands on by accident.
+Two habits matter more than any setting.
 
-### The Memory Tab
+**Teach each object two or three times, turning it between teaches.** One taught view is one point in CLIP's space, and the same object from another angle can land far from it. Re-teaching adds views. Recognition matches the nearest one. Measured on a live shard: a laptop's best single view covered 103 of its 173 later sightings, and the union of its six views covered all 173.
 
-**MEMORY** (or `M`) opens a full-screen list of every object the robot has been taught, newest first, with the number of times it has since been sighted. It answers "what do you actually know?" without pointing the camera at things one at a time.
+**Speak a phrase, not a single word.** "This is my laptop" works better than "laptop", because Whisper-base uses surrounding words to understand a short word. The same phrase is also what later questions match against.
 
-- **The picture is the object with a little room around it** — the detector's box plus a margin — not the crop and not the whole frame. What recognition compares is a masked, gray-filled cut-out that is hard for a human to identify; a whole frame is worse, because the object is a detail somewhere in a room. The margin is there so you can see where it was.
-- **Tap a picture to walk everything the robot holds for that object: its taught views first, then its own recent photos.** Teaching the same object again adds a view rather than replacing one — that is what makes recognition work from more than one angle (see [What to teach](#what-to-teach)) — and this is the only way to see whether the second one was any good. After the taught views come the newest **sightings**, the pictures the robot took on its own and the same ones recall answers with; they used to be reachable only by asking "where did I leave it". The caption runs one combined count over the whole cycle and says which kind is showing (`1 of 10 · taught`, `3 of 10 · seen`), and sightings show the newest of each distinct occasion rather than every frame of one sitting.
-- **RENAME fixes the name without touching the vectors.** Whisper mishears a bare noun — a real capture of "laptop" came back as `La-caw` — and until this existed the only cure was to forget the object and teach it again, throwing away good views because the *word* was wrong. Tap RENAME, type, press Enter. Renaming onto a name that already exists merges the two objects, which is how you fix `Laptop` and `laptop` having become separate things.
-- **FORGET on a card takes two taps.** The first arms it, the second deletes. It removes every point for that object, taught views and sightings alike, and it cannot be undone.
-- **DROP THIS VIEW deletes the picture you are looking at — taught views and sightings alike.** This is the cure for a single bad teach (a blurred crop, or one that caught the desk instead of the mug) and equally for a bad auto-saved photo (a stale box, a hand over the object), either of which otherwise sits in memory forever. Tap the picture until the bad one is showing, then drop it. A sighting photo stands for one *occasion* — every near-identical frame the robot logged within ten minutes of it — and dropping it removes the whole occasion, so the photo actually disappears instead of being replaced by the next frame of the same moment. The button hides on an object's *last taught view*, because dropping that would forget the whole object — FORGET is the honest button for that.
-- **The first row says where the robot is, and SET LOCATION changes it.** The location is stamped on every memory written from then on, and recall reads it back — *"I saw my keys at 2:14 PM, in the hotel room"*. It persists across power cuts (it is stored beside the memories), so set it once when the robot moves venues. Memories already written keep the place they were taught at, which is the point: "where are my keys" should answer where it saw them, not where the robot is now. `--location` on the command line still overrides it for a single run.
-- **Ignored objects are listed at the bottom**, with a picture each and a **TRACK AGAIN** button — and a dismissal now **survives a restart**. `Q` / **IGNORE** stores what the dismissed thing looks like (its vector, the same way recognition works), so after a power cut the same clutter is quietly re-dismissed the first time it is seen instead of coming back to be ignored again. An object you were taught always wins over an ignore, so dismissing something can never hide a taught object; if an ignore ever swallows an unknown you *did* want, it is in this list — tap TRACK AGAIN.
-- The list pages in as you scroll, and the video feed is dropped while the tab is open — on the appliance's own Wi-Fi the feed is most of the radio, and none of it is visible behind the tab.
+Teach objects rather than surfaces. A crop with little in it, such as a blank panel or a reflective surface, can match too much of the room. Fill more of the frame with the object and teach it again.
 
-Objects taught before this existed have no picture of their own and fall back to showing their recognition crop, which is why an old memory looks gray and masked beside a new one. Nothing needs deleting; teach it again and the newer view carries a proper picture. (Memories taught during one brief window show the whole frame instead of the object — same story, same fix.)
-
-### The Page
-
-The browser gets the annotated camera feed as MJPEG and polls `/state` for everything else, so the memory panel is HTML: it lays out for the screen it lands on, in portrait as well as landscape, and reads at arm's length on a phone. It was previously drawn into the video at a fixed 480 px, which on a phone held upright rendered about 100 px wide — hence the "rotate to landscape" nag that is now gone.
-
-The panel shows what the robot is attending to: the label or `UNKNOWN`, the live similarity score against the threshold, the remembered view beside the live one, and the result of the last action. Refusals such as *nothing new to teach* appear as a status line under the panel rather than being painted into the video. `TEACH` dims when there is nothing new in view, so you can see whether it will do anything before you press it.
-
-There is a third state between the two: an **orange box saying `hat? 0.87`** means the nearest taught object scored *close to* the bar but under it (within 0.05). It is a guess, not a recognition — the object is still unknown to the robot, still teachable, and nothing is logged off it. When the thing in the orange box really is your hat, **tap the orange label on the panel** (`hat? — tap to confirm`): that teaches the current crop under that name in one tap, no voice needed, and the box turns teal on the spot. It is exactly the "teach this angle too" fix — a miss just under the bar is a coverage problem, not a threshold problem — minus the voice round trip. When it *isn't* your hat, don't confirm: the orange box is showing you exactly the near-matches the threshold exists to keep out (reflective and featureless things live in that band), which is why the bar should not be lowered to admit them.
-
-### Aiming It
-
-`TEACH` acts on the most prominent **unknown** object; the `F` key acts on the recognized object the panel is showing. Prominence is size weighted by centrality, so the way to aim the robot is to bring the object closer and hold it toward the middle of the frame. Aiming only has to be good enough for teaching now — deleting is done from the [memory tab](#the-memory-tab), by picking the object off a list.
-
-Focus is deliberately **sticky**: once an object holds the thick box, it keeps it until something is clearly more prominent — roughly 60% more — or until it leaves the frame. Without that, two objects of similar size and position trade the box several times a second, and you end up teaching whichever one happened to win on the frame you pressed. If focus won't leave an object, move the one you want closer or more central, or press `Q` / **IGNORE** to dismiss the current unknown outright.
-
-To trade a twitchier box for an easier-to-move one, `FOCUS_MARGIN` in `robot/core.py` is the single number: lower is more responsive and more jittery, higher is calmer and more stubborn. It was raised from 25% after the box was still seen trading between unknowns on a cluttered desk — a static object's box changes size frame to frame, and prominence is size weighted by centrality, so the jitter it has to absorb is larger than it looks.
-
-There is a second reason the box can move that no amount of stickiness fixes: if the detector loses the object outright for a moment, it stops being a candidate and focus has to go somewhere. That is a detection problem, not an attention one — see `DEAD_SECONDS` in `robot/detect.py`.
-
-### Flags
-
-The first three are per-camera settings whose permanent home is `.env`; the flags override it for a single run, which is what you want while calibrating.
-
-| Flag | What it does |
-|---|---|
-| `--threshold 0.90` | Recognition bar: the nearest taught view must score at least this to count as a match. `.env` `RECOGNIZE_THRESHOLD`. See [Calibrating For Your Camera](#calibrating-for-your-camera). |
-| `--conf 0.30` | Detector confidence floor. Raise it if the view tracks too much clutter. `.env` `DETECT_CONF`. |
-| `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. The default drops torso-sized boxes. `.env` `DETECT_MAX_AREA`. |
-| `--location "Hotel room"` | Place stamped on every memory this session; recall says it back ("I saw my keys at 2:14 PM, in Hotel room"). Overrides, for this run only, whatever **SET LOCATION** in the [memory tab](#the-memory-tab) stored — the tab's value persists in the data dir. |
-| `--reset` | Wipe all memories before starting, for a clean slate between takes. Kept off the live UI so a stray tap can't erase the demo. |
-| `--camera 1` | Use a different webcam. |
-| `--host 0.0.0.0` | Serve the browser view on the network so a phone or iPad can open it. The app still runs on this machine. |
-| `--advertise 10.42.0.1` | Address to put in the URL and the certificate, when it is not the one to look up. Used by the headless appliance, whose own hotspot address never changes — see [Headless Appliance](#headless-appliance). |
-| `--watchdog 30` | Exit if the camera delivers no frame for this long, so a service manager can restart the robot. Off by default: on a laptop, closing the lid looks exactly like a stalled camera. |
+People are objects too. Point the camera at someone, say "this is Dylan", and they are recognized like anything else. CLIP is not a face recognizer: it keys on the whole silhouette, clothing included, so expect to re-teach when someone changes their jacket.
 
 ## Calibrating For Your Camera
 
-**Symptom:** you teach the robot one object and half the room starts matching it, at scores just over the bar, while the real object sits higher. Nothing is broken. The threshold is a per-camera number and the default is not yours.
+**Symptom:** you teach one object and half the room starts matching it, just over the bar.
 
-CLIP cosine similarity does not run from 0 to 1 in practice. Two *unrelated* crops from the same camera routinely score 0.75 to 0.85, because they share lighting, sensor, background, and scale. `0.90` is not "90% confident" — it is a point above that floor. Move the camera further from the desk and every crop gets smaller and softer, the floor rises, and a threshold that worked at arm's length starts matching the furniture.
-
-Copy the example file and calibrate:
+CLIP cosine similarity, a measure of how close two vectors point, does not behave like a percent from 0 to 1. Two unrelated crops from the same camera can routinely score 0.75 to 0.85, because they share lighting, sensor, background, and scale. `0.90` is not "90% confident". It is a point above that floor. Move the camera farther away and every crop gets smaller and softer, the floor rises, and a threshold that worked at arm's length starts matching the furniture.
 
 ```bash
-cp .env.example .env
 uv run python testdata/verify_scores.py
 ```
 
-The script crops through the same code path the live robot uses and prints three things:
+The script crops through the same code path the live robot uses and prints same-object and different-object score ranges, the margin between them, and a threshold sweep. Put a value from the clean range into `.env`. To calibrate against your own scene, photograph two or three objects three times each, name them `<object>_<n>.jpg`, and pass `--source ~/my-photos`.
 
-- **Per-pair scores**, split into same-object and different-object.
-- **The margin**, worst same-object score minus best different-object score. If this is negative, no threshold works and the crops are the problem — get closer, add light, fill more of the frame.
-- **A threshold sweep**, showing how many true matches survive and how many false ones creep in at each candidate.
+Separate photos of distinct objects score farther apart than a live cluttered scene does, so treat the script's answer as a floor and expect to raise it against the real thing.
 
-Put the middle of the clean range into `.env` as `RECOGNIZE_THRESHOLD`.
-
-`.env` also holds the two ends of the size band the detector keeps. `DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame — walls, desks, whole rooms, which a prompt-free detector proposes freely. `DETECT_MIN_AREA` drops the ones smaller than a fraction of it, which is the knob to reach for when something small and far away keeps taking the unknown box away from the thing you are holding up. Both are **areas**, so they move as the square of how big a thing looks: going from `0.0008` to `0.001` raises the smallest tracked object by about 12% in width, not 25%.
-
-To calibrate against your own scene rather than the bundled photos, take three photos of each of two or three objects with the camera you'll demo with, name them `<object>_<n>.jpg`, and point the script at them:
-
-```bash
-uv run python testdata/verify_scores.py --source ~/my-photos
-```
-
-Photos of distinct objects score lower than a live cluttered scene, so treat the script's answer as a floor and expect to raise it a little against the real thing.
-
-### What to teach
-
-Teach objects, not surfaces. A crop with little information in it — a blank panel, a reflective surface, a blurred fragment — sits near the middle of CLIP's space, close to everything, so it makes a memory that matches most of the room. That looks exactly like a broken threshold and isn't one. Fill more of the frame with the object and teach it again.
-
-**Teach each object two or three times, turning it between teaches.** One taught view is one point in CLIP's space, and the same object seen from another angle can land far from it — under the recognition bar, so the robot treats an object it knows as a stranger. Re-teaching adds views, and recognition matches against the nearest one; this is the same idea as adding documents to a search index, and it is the single biggest recognition improvement available. Measured on a live shard: a laptop's best single view covered 103 of its 173 later sightings, the union of its six views covered all 173.
-
-**People are objects too.** Nothing filters them out any more: point the camera at someone, hold TEACH and say "this is Dylan", and they are recognized like anything else. Two things to know. A seated person at desk distance is about 7% of the frame, comfortably inside the `--max-area` cap, but a face filling the view is not — stand back rather than leaning in. And CLIP is not a face recognizer: at 512 dimensions from a 224 px crop it keys on the whole silhouette, clothing very much included, so expect it to need a re-teach when someone changes their jacket, and expect two people dressed alike to be harder to separate than two different objects. Teach each person two or three times, as you would anything else.
-
-Teach it while it is still in view. A box outlives its object by a fraction of a second, so the detector can ride out a dropped frame instead of blinking — press `TEACH` just after pulling the object away and you can capture the last crop of empty space, which is the blank-crop problem above. If a memory starts matching everything, forget it in the [memory tab](#the-memory-tab) and teach again.
-
-### What to say
-
-**Speak a phrase, not a single word.** "This is my laptop" is recognized reliably; "laptop" on its own often is not. Whisper-base leans on surrounding words to pin down a short one, and a bare noun gives it nothing to lean on — a real capture of one isolated word came back as `La-caw`. The phrase is also what `parse_label` is built to read: it takes the words after "this is" and stops at the first new clause, so *"This is my mug, Maria made it"* teaches `my mug`.
-
-**The words you teach with are what questions match against.** "Where did I leave my hat?" finds the hat by comparing the question to the sentence you spoke when teaching it, then answers with the last few times it saw it. A phrase ("this is my hat") therefore helps twice: Whisper hears it better, and questions about the object land on it more surely.
-
-**Release the button when you stop talking.** Holding it open for a few extra seconds used to cost twice: Whisper charges for every second of audio, and given a stretch of silence it starts repeating itself — a 7.7 s hold around 1.4 s of speech transcribed to `L L L L L L…` and took 16.3 s. Silence is now trimmed off both ends before transcription (2.0 s and 5.2 s for that same clip, halved again since — see below), so a long hold costs you little — **as long as the robot can find your speech in it**. Speak up: the trim looks for audio above a fixed bar, and a hold too quiet to clear it is passed to Whisper whole, repeated letters and all. The `rms` in the log is the number to watch.
-
-**The robot listens in English.** `LANGUAGE` in `robot/models.py` names it, and naming it is worth more than it sounds: this Whisper export runs its encoder inside the same graph as its decoder, so letting Whisper *guess* the language means running that whole graph twice. Naming it cut a teach from about 6 seconds to about 2. It also stops a stray mis-detection storing an English object under a Cyrillic name, which the log caught happening. Set that string to another Whisper language code to teach in that language, or to `None` to pay the second pass and let Whisper guess afresh every time.
-
-The log prints what it heard and what it kept, which is where to look first when a label comes out wrong:
-
-```
-recorded level (rms): 1641
-trimmed the hold down to 2.0 s of speech
-taught "my laptop": 'This is my laptop.'
-```
-
-An `rms` of 0 means no audio reached the robot at all — that is a browser mic permission, not a recognition problem.
+The other knobs in `.env` are the size band the detector keeps. `DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame, which a prompt-free detector proposes freely for walls and desks. `DETECT_MIN_AREA` drops the small far-away clutter that keeps stealing the unknown box. Both are *areas*, so they move as the square of apparent size.
 
 ## Phone Or Tablet Demo
-
-Run the app on the robot or laptop with:
 
 ```bash
 uv run python -m robot.app --host 0.0.0.0
 ```
 
-The app prints an HTTPS LAN URL such as `https://<lan-ip>:8765`. Open that URL on a phone or iPad, accept the certificate warning once, then use the on-screen hold-to-talk buttons. The phone records the audio and uploads it; the robot still handles transcription, memory writes, and recall.
+The app prints an HTTPS URL. Open it on the phone, accept the certificate warning once, then hold the on-screen buttons to talk. The phone records the audio and uploads it. The robot does everything else.
 
-The page opens the mic on your first touch anywhere and **keeps it open** while the tab lives, so your browser shows a recording indicator the whole time. That is deliberate: opening the device and compiling the audio worklet per press takes long enough that the start of a promptly-spoken word lands before recording begins, and it does that work on the same main thread that is painting the video feed. Close the tab to release the mic. Audio is captured at 16 kHz — what Whisper wants — so what goes up the link is a third of the bytes a 48 kHz capture would send.
+Browsers only allow microphone access in a secure context, so the app serves HTTPS and generates a self-signed certificate on first run. Self-signed means the robot created the certificate itself instead of getting one from a public certificate authority, so the browser warns you. No public certificate authority will sign a certificate for a private address.
 
-### Stopping The "Allow Microphone?" Prompt
+**To remove the warning on your demo phone**, install the certificate as trusted:
 
-If the browser asks for the microphone every time you use the robot, that prompt is the **browser's**, not the page's — the page asks exactly once per visit and holds on to the mic. Two browser behaviours multiply into "every single time": the default per-site microphone permission is *Ask*, which re-prompts on every fresh page load, and a phone reloads this page more often than it looks, because backgrounding the tab or locking the screen usually evicts it. Make the grant permanent once:
+1. Open `https://<address>:8765/cert.crt` and accept the warning one last time. **On iOS this must be done in Safari**, which is the only browser that hands the file to the system as an installable profile.
+2. **iOS:** Settings > General > VPN & Device Management, install the profile, then Settings > General > About > **Certificate Trust Settings** and enable full trust. That last step is easy to miss.
+3. **Android:** Settings > Security > Encryption & credentials > Install a certificate > **CA certificate**.
 
-- **iOS/iPadOS (Safari):** with the page open, tap **aA** in the address bar → **Website Settings** → **Microphone** → **Allow**. That is stored per site and survives reloads.
-- **Chrome on iOS:** there is no per-site Allow to set — the prompt on **every press** stops only once the robot's certificate is installed and fully trusted (next section). Chrome on iOS uses the system trust store, so the Safari-based install below fixes Chrome too; until then it re-asks on every microphone use because the origin is untrusted.
-- **Android (Chrome):** the grant is remembered on its own **once the certificate is trusted** (next section) — Chrome deliberately refuses to remember permissions for a site whose certificate it does not trust, so an untrusted cert is what makes the prompt come back.
+On iOS the trust is system-wide, so every browser on the phone stops warning and microphone grants start being remembered. The certificate names the address it was generated for, so trust it once per address you demo on.
 
-### Why HTTPS, And Why The Warning
-
-Browsers only hand out the microphone in a **secure context**. `http://localhost` counts as one, but `http://192.168.x.x` does not — so the moment the interface moves to your phone, the app has to serve HTTPS. It generates a self-signed certificate into `cert/` on first run.
-
-The warning appears because nothing vouches for that certificate. It is not a misconfiguration and it cannot be coded away: a public certificate authority will not sign a certificate for a private LAN address, and reaching one would need internet access this demo is designed not to need. Accepting it once per device is the normal path, and the mic works fine afterwards.
-
-**To get rid of the warning on your own demo phone** — worth doing before filming — install the certificate as trusted, once:
-
-1. Open `https://<lan-ip>:8765/cert.crt` on the phone and accept the warning one last time to download it. **On iOS this step must be done in Safari** — only Safari hands the file to iOS as an installable profile; Chrome and other iOS browsers just download it to Files, where it installs nothing.
-2. **iOS/iPadOS:** Settings → General → VPN & Device Management → install the downloaded profile. Then, and this step is easy to miss, Settings → General → About → **Certificate Trust Settings** → enable full trust for `l6-robot`.
-3. **Android:** Settings → Security → Encryption & credentials → Install a certificate → **CA certificate** → pick the downloaded file.
-
-On iOS the trust is system-wide: every browser on the phone (Chrome included — they are all WebKit underneath) stops warning, and mic permission grants start being remembered.
-
-Reload the page and the warning is gone for good on that device.
-
-The certificate names the IP address it was generated for, so it is regenerated automatically whenever the robot's address changes — which means a phone you trusted on your home Wi-Fi will warn again on the booth network, or after switching to hotspot mode. Trust it once per address you demo on. Certificates are valid for 397 days; Safari rejects anything much longer, trusted or not.
-
-This works offline in either setup:
-
-- Put the robot and phone on the same Wi-Fi network.
-- Or make the robot a hotspot:
-
-```bash
-sudo nmcli device wifi hotspot ssid l6-robot password <password> band a channel 44
-uv run python -m robot.app --host 0.0.0.0 --advertise 10.42.0.1
-```
-
-Then open `https://10.42.0.1:8765`. `--advertise` is what makes the certificate name the hotspot's address: without it the app names whichever address it can look up — the Ethernet one, or `127.0.0.1` when the hotspot is the only network — and a certificate that names an address you are not opening gives the harsher warning described above, the one trusting it cannot fix.
-
-For the permanent version of this, where the robot boots into the hotspot by itself, see [Headless Appliance](#headless-appliance).
-
-On a laptop, the `T` and `A` keys use the laptop mic through `sounddevice`. If the wrong input is selected, set `MIC_DEVICE` in `robot/audio.py`. To list devices:
-
-```bash
-uv run python -c "import sounddevice; print(sounddevice.query_devices())"
-```
+The page opens the microphone on your first touch and keeps it open, which is why the recording indicator stays on. Opening it per press takes long enough that the start of a promptly spoken word is lost.
 
 ## Headless Appliance
 
-The demo unit has no keyboard, no screen, and no network it can rely on. Set up as an appliance, it needs none of them: apply power and it boots into the robot, brings up **its own Wi-Fi network**, and stays live until the power goes away.
+The demo unit has no keyboard, no screen, and no network it can rely on. As an appliance, it boots into the robot on **its own Wi-Fi network**.
 
 ```bash
 sudo ./deploy/headless-setup.sh
 sudo reboot
 ```
 
-Then, from a phone — anywhere, including a booth with no Wi-Fi at all:
+Then, from a phone anywhere, including a venue with no Wi-Fi at all:
 
-1. Join the Wi-Fi network **`l6-robot`**, password **`qdrantedge`**.
+1. Join the network **`l6-robot`**, password **`qdrantedge`**.
 2. Open **`https://10.42.0.1:8765`**.
-3. Accept the certificate once, or install it from `https://10.42.0.1:8765/cert.crt` to stop being asked. Unlike the LAN case, this trust is **permanent**: the robot's hotspot address never changes, so the certificate never has to be reissued.
+3. Accept the certificate once, or install it. This trust is permanent, because the hotspot address never changes.
 
-Set your own network name and password by running the script with them: `sudo SSID=my-robot PSK=my-password ./deploy/headless-setup.sh`.
+Set your own name and password with `sudo SSID=my-robot PSK=my-password ./deploy/headless-setup.sh`.
 
-**Your phone keeps its cellular service.** Joining the robot only takes over the phone's Wi-Fi; both iOS and Android keep sending internet traffic over mobile data once they notice the robot's network has no internet path. iOS says "No Internet Connection" under the network name and works fine. On Android, *Settings → Network & internet → Internet → "Switch to mobile data automatically"* is the one setting that can drop the Wi-Fi association outright; turn it off for that phone if it misbehaves. And when the robot happens to have Ethernet plugged in, its hotspot shares that connection, so there is real internet on it too.
+**Your phone keeps its cellular service.** Joining only takes over Wi-Fi, and both iOS and Android keep internet traffic on mobile data once they notice the robot's network has no internet path.
 
-**That sharing cuts both ways — don't leave a laptop joined to the hotspot.** A laptop treats the robot's network as its internet connection whenever Ethernet gives the hotspot one, so every background sync, update and cloud backup it runs is routed through the robot's radio — the same radio carrying the video feed. The feed then lags exactly as described under [The Feed Is The Bottleneck](#the-feed-is-the-bottleneck), and nothing on the robot is at fault: disconnect the laptop and it clears immediately. (Confirmed on this unit: the robot measured a healthy 9.7 fps locally throughout one such "slowdown".) Phones mostly dodge this by keeping their traffic on cellular; laptops do not.
+**Do not leave a laptop joined to the hotspot.** When the robot has Ethernet, its hotspot shares that connection, so a laptop routes all its background traffic through the same radio that carries the video feed. That is the most common cause of a demo that looks slow.
 
-### Turning It On And Off
-
-There is no power button, and the Jetson does not need one: *"By default, Jetson Orin Nano Developer Kit turns on automatically as soon as the included DC power supply is connected to the DC power jack"* ([user guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/howto.html)). Plugging the case in is the on switch.
-
-**Pulling the plug is the off switch, and it is safe for the memories.** Every teach writes one point and flushes it to disk immediately — `Memory._upsert` does this on purpose, because the lesson's offline-reboot beat power-cycles the device. There is no buffered state to lose. For a graceful shutdown anyway, `ssh qdrant@10.42.0.1 sudo poweroff`.
-
-If you would rather have a real button in the case, the carrier board has a button header for one — a short press then gives a clean soft shutdown as well as power-on. The pin assignments are in the *Jetson Orin Nano Developer Kit Carrier Board Specification* (Jetson Download Center); confirm them against your board rather than against a blog post, because the same header also carries the force-recovery and reset pins.
-
-### The Clock, Which Recall Reads Out Loud
-
-Worth knowing before it embarrasses you on camera: recall says *"I saw my keys at 2:14 PM"*, and a robot that has been unplugged and has no internet does not know what time it is. There is no NTP server on its own hotspot, and `systemd-timesyncd` restores the **last time it saw** at boot rather than the real one — so a robot switched on cold at a booth stamps new memories with the time it was last packed away.
-
-Two fixes, either is enough:
-
-- **Set it once over ssh** when you set up for the day: `sudo timedatectl set-ntp false && sudo timedatectl set-time "2026-08-12 09:30:00"`, then `sudo systemctl restart l6-robot`. Turn NTP back on (`set-ntp true`) when the robot is next on a real network. The restart is because track ageing still reads the wall clock, so a large step leaves the boxes on screen confused for a few seconds; the watchdog itself is immune to it.
-- **Fit a coin cell to the RTC backup battery connector** on the carrier board, which keeps the clock running with the power off. It is a 2-pin 1.25 mm connector, `J3` in the [Carrier Board Specification](https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/orin_nano/docs/jetson_orin_nano_devkit_carrier_board_specification_sp.pdf) — confirm against your own board, since `J13` next to it is the fan. Discussion and a working socket part are in [this NVIDIA forum thread](https://forums.developer.nvidia.com/t/rtc-battery-on-jetson-orin-nano-developer-kit/296732).
-
-Plugging Ethernet in for a minute also fixes it, whenever that is an option.
-
-### What The Setup Changes
-
-Five things, each reversible on its own:
+The setup changes five things, each reversible on its own:
 
 | Change | Why | Undo |
 |---|---|---|
-| Installs and enables `l6-robot.service` | Starts the robot at boot and restarts it if it dies | `sudo systemctl disable --now l6-robot` |
-| Adds an `l6-hotspot` Wi-Fi profile in AP mode on **5 GHz channel 44**, and sets saved networks to not autoconnect | One radio cannot be an access point and a client at once, and the robot must work where there is no network. The band is not incidental — see [The Feed Is The Bottleneck](#the-feed-is-the-bottleneck) | `sudo nmcli con delete l6-hotspot`, then re-enable autoconnect on your own network |
-| `systemctl set-default multi-user.target` | Frees roughly 1.5 GB of GNOME on an 8 GB board, next to a robot process that reaches 3.4 GB. It also retires the over-current popup, which is a desktop applet | `sudo systemctl set-default graphical.target` |
-| Generates ssh host keys and starts `sshd` | The only way into a box with no peripherals. A missing host key leaves `sshd` enabled but dead, which you discover at the worst moment | — |
-| Fills the model cache under `$HOME` | `FastEmbed` defaults to `/tmp`, which `systemd-tmpfiles` prunes at 30 days. Losing 1.1 GB of encoders on a robot with no internet means it boots into a download that never finishes | — |
+| Installs and enables `l6-robot.service` | Starts at boot, restarts on failure | `sudo systemctl disable --now l6-robot` |
+| Adds an `l6-hotspot` profile on 5 GHz channel 44, and stops saved networks autoconnecting | One radio cannot be an access point and a client at once. 2.4 GHz cannot carry the video feed | `sudo nmcli con delete l6-hotspot` |
+| `systemctl set-default multi-user.target` | Frees roughly 1.5 GB of desktop on an 8 GB board | `sudo systemctl set-default graphical.target` |
+| Generates ssh host keys and starts `sshd` | The only way into a box with no peripherals | |
+| Fills the model cache under `$HOME` | FastEmbed defaults to `/tmp`, which is pruned at 30 days. A robot with no internet would boot into a download that never finishes | |
 
-### Maintenance
+Maintenance is `ssh qdrant@10.42.0.1`, then `journalctl -u l6-robot -f`. [REMOTE-ACCESS.md](REMOTE-ACCESS.md) covers the other ways in, the serial console fallback, and how to move the robot between Wi-Fi networks.
 
-From a laptop joined to `l6-robot`, or over Ethernet when the robot is on a desk — the view is served on every interface, though opening it on the Ethernet address warns about the certificate, which names the hotspot:
+**Set the clock before filming.** Recall reads times out loud, and a robot that has been unplugged with no internet does not know what time it is. Either `sudo timedatectl set-time "..."` over ssh, or fit a coin cell to the RTC connector.
 
-```bash
-ssh qdrant@10.42.0.1
-journalctl -u l6-robot -f          # the robot's console output
-sudo systemctl restart l6-robot    # after editing code or .env
-```
+## Running On A Jetson Orin Nano
 
-There are three independent ways in — your LAN with the robot wired to the router, the robot's own hotspot, and a USB-C cable that needs no network at all — plus a serial console for when none of them answer. [REMOTE-ACCESS.md](REMOTE-ACCESS.md) covers all of them, how to work on the robot once you are in, and how to move it between Wi-Fi networks without stranding it.
+The same run commands work on the 8 GB board. Four things are worth knowing:
 
-To get the robot back onto a real network for updates, plug in Ethernet, or `sudo nmcli con up "<your network>"` — the saved profiles are kept, just stopped from autoconnecting. Bring the hotspot back with `sudo nmcli con up l6-hotspot`.
+- **Torch prints a compute-capability warning.** It is cosmetic. Orin is `sm_87` and runs the wheel's `sm_80` kernels, and CUDA is genuinely in use: the detector runs at roughly 165 ms per frame against seconds per frame on CPU.
+- **Only the CLIP vision encoder loads at startup.** Speech and text encoders load the first time you teach or ask, which is what keeps the board out of swap. Expect roughly 2.5 GB after startup.
+- **Keep the stock 15 W power mode.** The bottleneck is memory and the USB camera, not the GPU.
+- **"System throttled due to Over-current" can pop up repeatedly.** In this demo it does not mean the robot is too slow or underpowered. `OC3` counts instantaneous spikes caught by a hardware comparator, far too fast for the power sensor to sample, which is why `tegrastats` shows nothing near the limit. Sustained draw here is about 1.9 A against a 4.05 A limit, and detector latency stays flat. The appliance setup removes the desktop applet that shows the popup.
 
-Two behaviours worth knowing before you debug them:
-
-- **A crash is invisible and self-healing.** The service restarts 10 seconds later and takes about 40 seconds to reload the detector, so an unplugged camera looks like a robot that is simply slow to come back. `journalctl -u l6-robot` is where the reason is.
-- **The service runs with `--watchdog 30`.** A USB camera that wedges *inside* a driver call cannot be noticed by the thread stuck in it, so the app exits if no frame arrives for 30 seconds and lets systemd restart it. If you ever see a restart with no error above it, that was this.
-
-### The Feed Is The Bottleneck
-
-The live view is MJPEG, and at the camera's 10 fps it is **well over 10 Mbps** of video the robot has to push over its own hotspot — far more than anything else the demo does. How far over depends on the scene, not on the code: a 1280x720 frame measured 210 KB pointed at a cluttered desk here (17 Mbps), against 183 KB recorded earlier on a tidier one. Measure yours rather than trusting either number.
-
-Moving the panel out of the video took roughly 13% off that — A/B on one scene, 241 KB per composed frame against 210 KB per feed frame. Worth having, but the camera view, not the panel, was always the expensive part.
-
-That number is why the hotspot is on 5 GHz. A 2.4 GHz access point at 20 MHz carries 15–25 Mbps in an empty room and much less in a hall full of phones, so the radio becomes the narrowest part of the chain. When that happens the failure is not a dropped frame: TCP queues what it cannot send, so the feed arrives smooth but **seconds behind the room**, and the delay grows the longer you watch. Pressing TEACH on an object you can no longer see is the symptom that ruins a demo.
-
-The trade is range. 5 GHz carries less far and through less material, so keep the phone in the same room as the robot rather than across a hall.
-
-The radio is also shared with whatever else joined the hotspot. When Ethernet is plugged in, the hotspot carries real internet, and a **laptop** joined to it will happily route all its background traffic through the robot — which lags the feed with nothing on the robot at fault. Disconnect it; details under [Headless Appliance](#headless-appliance).
-
-If the feed still lags — an unavoidably crowded band, or a client stuck on 2.4 GHz — the one number to turn is `STREAM_QUALITY` in `robot/app.py`. Dropping it from 85 to 70 costs about a quarter of the bytes, for a slightly softer image. Measure before and after rather than trusting a figure from another scene: JPEG size depends far more on what the camera is pointed at than on anything in the code. Check what you are actually up against first:
+The live view is MJPEG, a stream of JPEG images sent as video. At 10 fps it is well over 10 Mbps over the robot's own hotspot, which is the narrowest part of the chain. If the feed lags, measure before changing settings:
 
 ```bash
-iw dev wlP1p1s0 info                      # which band and channel the AP is really on
+iw dev wlP1p1s0 info    # which band and channel the access point is really on
 timeout 5 curl -sk https://127.0.0.1:8765/stream -o /dev/null -w '%{size_download}\n'
 ```
 
-The second command measures what the robot *wants* to send, over loopback, with the radio out of the picture. Divide by 5 for bytes per second. If that number is comfortable and the phone still lags, the problem is the link, not the robot.
+The second command measures what the robot wants to send with the radio out of the picture. If that number is comfortable and the phone still lags, the problem is the link. `STREAM_QUALITY` in `robot/device/live.py` is the one number to turn, against a measurement of your own scene.
 
 ## Project Layout
 
-| Path | Purpose |
-|---|---|
-| `robot/app.py` | Browser UI, phone controls, live mode, and replay mode |
-| `robot/core.py` | Main robot loop |
-| `robot/detect.py` | YOLOE detection, tracking, and cadence gating |
-| `robot/memory.py` | Qdrant Edge teach, recognize, and recall logic |
-| `robot/models.py` | Embedding and speech model setup |
-| `robot/config.py` | Per-camera settings, read from `.env` |
-| `deploy/` | `headless-setup.sh` and the systemd unit that make it an appliance |
-| `REMOTE-ACCESS.md` | Getting a shell on the headless unit, and moving it between Wi-Fi networks |
-| `testdata/` | Replay fixtures, plus `verify_scores.py` for calibration |
-| `hardware/` | The enclosure: print files, the model that makes them, and the build spec |
-| `BOM.md` | What to buy, and what the camera has to measure |
+The package is split by what you are trying to understand. **`device` imports `brain`, and `brain` never imports `device`**, so the retrieval code can be read without a camera or a socket in the way.
 
-Shard data is stored in `edge-data/`, which is gitignored. Delete that directory for a blank memory.
+```text
+robot/app.py            argparse, main, and headless replay
+robot/config.py         per-camera knobs, read from .env
+robot/brain/            the retrieval and the decision loop
+  core.py               Robot: the loop, attention, teach / forget / ask
+  memory.py             Qdrant Edge: the shard, the threshold, recall
+  models.py             CLIP, Nomic, and Whisper loaders
+  detect.py             YOLOE, tracking, and the stability gate
+  labels.py             a spoken sentence to an object's name
+robot/device/           camera, browser, microphone, hardware
+  live.py               the threads, the buttons, and the voice path
+  server.py             HTTP routes, the MJPEG stream, and the certificate
+  page.html             the whole user interface
+  mic.py                local microphone capture
+  draw.py               boxes drawn onto the feed
+deploy/                 the setup script and systemd unit for the appliance
+testdata/               replay fixtures, and verify_scores.py for calibration
+hardware/               the enclosure: print files, the model, and the spec
+```
+
+Memories live in `edge-data/`, which is gitignored. Delete that directory for a blank robot, or start with `--reset`.
+
+Start reading at `robot/brain/core.py`. `process_frame` is the loop, and everything else is a step inside it.
+
+To run the recognition path with no camera at all:
+
+```bash
+uv run python -m robot.app --source testdata/
+```
+
+## Flags
+
+| Flag | What it does |
+|---|---|
+| `--threshold 0.90` | Recognition bar. `.env` `RECOGNIZE_THRESHOLD` |
+| `--conf 0.30` | Detector confidence floor. Raise it to track less clutter. `.env` `DETECT_CONF` |
+| `--max-area 0.20` | Biggest detection kept, as a fraction of the frame. `.env` `DETECT_MAX_AREA` |
+| `--location "Hotel room"` | Place stamped on this session's memories, which recall reads back |
+| `--reset` | Wipe all memories before starting |
+| `--camera 1` | Use a different webcam |
+| `--host 0.0.0.0` | Serve the view on the network, for a phone or iPad |
+| `--advertise 10.42.0.1` | Address to put in the URL and the certificate, for the appliance |
+| `--watchdog 30` | Exit if the camera delivers no frame for this long, so a service manager can restart. Off by default, because a closed laptop lid looks exactly like a stalled camera |
+| `--source DIR` | Headless replay over images or a video, with no camera |
+
+The first three are per-camera settings whose permanent home is `.env`. The flags override it for one run, which is useful while calibrating.
 
 ## Hardware
 
-One demo unit: a 130 x 190 mm printed shell with a Jetson standing on edge inside it, one USB camera behind the eye, and an antenna on top. It is a filming and booth prop, not a consumer device.
+A 130 x 190 mm printed shell with a Jetson standing on edge inside it, one USB camera behind the eye, and an antenna on top. It is a filming and booth prop rather than a consumer device.
 
 - **Jetson Orin Nano Super 8 GB**, low in the shell, where its weight keeps the robot upright.
-- **A 37 x 37 mm USB (UVC) camera** as the eye. The printed tray is cut to that size, so measure yours before printing. [BOM.md](BOM.md) has the limits.
-- **No microphone, speaker, or screen.** Your phone browser is the whole interface.
+- **A 37 x 37 mm USB (UVC) camera** as the eye. The printed tray is cut to that size, so measure yours before printing.
+- **No microphone, speaker, or screen.** Your phone browser is the whole interface. Spoken answers use macOS `say` when you run this on a Mac; on the Jetson the same sentence appears on the panel.
 - **Six printed parts, no screws.** A twist lock, two snap clips, one zip tie, and a drop of glue on the visor.
 
-Spoken answers use macOS `say`. The Jetson has no audio hardware, so there the answer is shown on the panel instead, the same sentence it would have spoken. Add `espeak` and a small USB speaker if you want it out loud.
+Parts and prices are in [BOM.md](BOM.md). Printing and assembly are in [hardware/README.md](hardware/README.md).
 
-A Raspberry Pi 5 (8/16 GB) with a USB webcam should run the software, but CPU-only inference makes it slow and the detector needs its own tuning. It is not a tested target and it does not fit this shell.
-
-**Parts and prices:** [BOM.md](BOM.md). **Printing and assembly:** [hardware/README.md](hardware/README.md).
+A Raspberry Pi 5 with a USB webcam should run the software, but CPU-only inference makes it slow and it does not fit this shell. It is not a tested target.

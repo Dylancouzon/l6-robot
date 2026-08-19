@@ -48,11 +48,11 @@ else echo "ssh: NOT running — check 'journalctl -u ssh'" >&2; fi
 say "model cache — 1.1 GB the robot cannot re-download once it is offline"
 # Before the Wi-Fi step, because after it this machine has no internet unless
 # Ethernet is plugged in. FastEmbed's default cache lives in /tmp, which
-# systemd-tmpfiles prunes; the app pins it under $HOME (robot/models.py), so
+# systemd-tmpfiles prunes; the app pins it under $HOME (robot/brain/models.py), so
 # fill it now — after this the robot boots with no network at all.
 sudo -u "$USER_NAME" -H env PATH="/home/$USER_NAME/.local/bin:$PATH" \
   sh -c "cd '$REPO' && uv run --no-sync python -c '
-from robot import models
+from robot.brain import models
 models.warm_up(lambda n: print(\"  cached\", n))
 models._text_model(); models._asr_model()
 print(\"  cached speech and text encoders\")'"

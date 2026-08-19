@@ -10,7 +10,7 @@ Two jobs:
 2. The knee. It sweeps candidate thresholds and prints where same-object
    matches survive while cross-object matches die.
 
-It embeds crops through `robot.detect.padded_crop` with the segmentation
+It embeds crops through `robot.brain.detect.padded_crop` with the segmentation
 mask, the same call the live robot makes, because the crop pipeline moves the
 scores as much as the encoder does: a plain crop of a studio photo and a
 masked crop of a small live detection are different distributions, and a
@@ -40,8 +40,8 @@ from PIL import Image
 from ultralytics import YOLO
 
 from robot.config import RECOGNIZE_THRESHOLD
-from robot.detect import CONF, IMGSZ, padded_crop
-from robot.models import CACHE_DIR, CLIP_VISION_MODEL, ENCODER_THREADS
+from robot.brain.detect import CONF, IMGSZ, padded_crop
+from robot.brain.models import CACHE_DIR, CLIP_VISION_MODEL, ENCODER_THREADS
 
 TESTDATA = Path(__file__).parent
 SWEEP = [0.75, 0.80, 0.85, 0.88, 0.90, 0.92, 0.95]
