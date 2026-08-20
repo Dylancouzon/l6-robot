@@ -30,3 +30,17 @@ def parse_label(transcript):
             break
         words.append(w)
     return " ".join(words[:5]).rstrip(".,!?").lower() or "unnamed"
+
+
+
+def norm_label(text):
+    """The shape a TYPED label takes: collapsed whitespace, lowercased.
+
+    Rename is the second door a label walks in through; `parse_label` above is
+    the first, and it ends in the same lowercasing. They are separate on
+    purpose - one parses a sentence, this normalizes a name - but a typed name
+    and a spoken one have to end up the same string, because it is a key. Both
+    callers here (the stored label, and the vector recall matches it by) go
+    through this one, so those two can never disagree.
+    """
+    return " ".join(text.split()).lower()

@@ -274,16 +274,23 @@ class Robot:
         self.log(f'forgot "{label[:18]}" -> {n} point(s)')
         return n
 
-    def rename(self, label, to):
+    def rename(self, label, to, text_vec=None):
         """Fix an object's name without touching what it looks like.
 
         Renaming onto a name that already exists merges the two objects, which
         is the cure for "Laptop" and "laptop" having become separate things.
+
+        `text_vec` is the new name embedded, which the caller computes OFF the
+        live-state lock (a first-of-session Nomic load is ~4 s of held GIL,
+        long enough for DEAD_SECONDS to delete live tracks). Passing it is what
+        lets recall find the object by its corrected name; see `Memory.rename`.
+        Optional, so a caller with no encoders - a script, a test - can still
+        fix a spelling.
         """
-        to = " ".join(to.split()).lower()
-        n = self.memory.rename(label, to)
+        to = labels.norm_label(to)
+        n = self.memory.rename(label, to, text_vec=text_vec)
         for t in self.detector.tracks.values():
-            # renamed in place rather than requeried: the vectors did not
+            # renamed in place rather than requeried: the IMAGE vector did not
             # change, so the box can just start saying the new name
             if t.label and t.label.lower() == label.lower():
                 t.label = to
@@ -356,8 +363,8 @@ class Robot:
     # -- ask -------------------------------------------------------------------
 
     def ask(self, question, since_ts=None):
-        """Recall, in two steps: pick the object by what was SAID about it,
-        then answer with where it was last seen.
+        """Recall, in three steps: the name the operator gave the thing, then
+        what was SAID about it, then where it was last seen.
 
         The question and the taught transcripts live in the same text space, so
         Nomic picks the object reliably. And once the object is chosen, "where
@@ -372,7 +379,20 @@ class Robot:
             since = day_start_ts() if since_ts is None else since_ts
             return {"inventory": True, "label": None, "note": None,
                     "score": 0.0, "sightings": self.memory.seen_since(since)}
-        hit = self.memory.best_taught(models.embed_query(question))
+        # Two chances, in this order: the question NAMES some objects, or it
+        # merely sounds like one. Names decide which objects are CANDIDATES -
+        # the operator's own words for things, so nothing unnamed can win - and
+        # the cosine then chooses among them, which is what stops "did dylan
+        # take my smartphone?" answering with the person. It is also what makes
+        # a shard whose transcripts drifted from their labels answer correctly,
+        # with nothing to migrate. Name nothing and the vector picks outright,
+        # exactly as before (a misheard question carries no label at all).
+        qv = models.embed_query(question)
+        named = self.memory.names_in(question)
+        hit = self.memory.best_taught(qv, labels=named)
+        if hit is None and named:
+            # forgotten between the scan and the query; answer as if unnamed
+            hit = self.memory.best_taught(qv)
         if hit is None:
             return {"inventory": False, "label": None, "note": None,
                     "score": 0.0, "sightings": []}
@@ -380,7 +400,12 @@ class Robot:
         return {"inventory": False, "label": label,
                 "note": hit.payload.get("transcript"),
                 "score": hit.score,
-                "sightings": self.memory.last_sightings(label)}
+                # a teach counts as an occasion here: it carries a ts, a place
+                # and a picture, so an object taught today and not recognized
+                # since answers with today, not with last week. Sightings-only
+                # is still what the memory tab reads.
+                "sightings": self.memory.last_sightings(
+                    label, kinds=("seen", "taught"))}
 
     # -- the reboot beat ---------------------------------------------------------
 
