@@ -35,6 +35,29 @@ def _number(name, default, cast=float):
             f"{name} in {ENV_FILE.name} must be a number, got {raw!r}")
 
 
+def _fractions(name, default):
+    """A knob that takes one fraction for all four sides, or four of them as
+    `left,top,right,bottom`. Fractions, not pixels, so it survives a change of
+    capture size."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    parts = [p.strip() for p in raw.split(",")]
+    if len(parts) == 1:
+        parts *= 4
+    try:
+        vals = tuple(float(p) for p in parts)
+    except ValueError:
+        raise SystemExit(
+            f"{name} in {ENV_FILE.name} must be one number or four "
+            f"(left,top,right,bottom), got {raw!r}")
+    if len(vals) != 4 or not all(0 <= v < 0.5 for v in vals):
+        raise SystemExit(
+            f"{name} in {ENV_FILE.name} wants four fractions of 0 to 0.5 as "
+            f"left,top,right,bottom, got {raw!r}")
+    return vals
+
+
 # -- recognition -------------------------------------------------------------
 
 # Nearest taught view must score at least this to count as "I know that".
@@ -76,3 +99,26 @@ if CAMERA_ROTATE not in (0, 180):
         f"CAMERA_ROTATE in {ENV_FILE.name} must be 0 or 180, got "
         f"{CAMERA_ROTATE}. A quarter turn would swap the frame's width and "
         "height, which the rest of the app assumes is landscape.")
+
+
+# What to cut off each edge of the camera frame, as fractions of the width and
+# height: one number for all four sides, or `left,top,right,bottom`.
+#
+# A lens whose image circle is smaller than the sensor puts its own black rim
+# in the picture, and the detector proposes boxes on that rim like any other
+# shape. Measure it rather than guessing: hold a white card against the lens,
+# capture one frame, and the rim is everything that stays black.
+#
+# Four numbers and not one because the rim is rarely centred. On the appliance
+# the circle sits 104 px low and 23 px left of the sensor centre, so one
+# symmetric fraction big enough to clear the worst edge keeps 50% of the
+# picture where four edge fractions keep 62%.
+#
+# Read in the picture's own coordinates: the mount rotation above happens
+# first, so `top` is the top of the feed you are looking at. Changing the
+# mount means measuring these again.
+FRAME_CROP = _fractions("FRAME_CROP", (0.0, 0.0, 0.0, 0.0))
+if FRAME_CROP[0] + FRAME_CROP[2] > 0.8 or FRAME_CROP[1] + FRAME_CROP[3] > 0.8:
+    raise SystemExit(
+        f"FRAME_CROP in {ENV_FILE.name} cuts away almost the whole frame: "
+        f"{FRAME_CROP}")
