@@ -10,6 +10,7 @@ Every point carries `kind`, which is the whole taxonomy:
     ignored   clutter someone dismissed. Image vector only.
 """
 import itertools
+import re
 import threading
 import time
 from pathlib import Path
@@ -23,9 +24,11 @@ from qdrant_edge import (
     EdgeVectorParams,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PayloadSchemaType,
     Point,
+    PointVectors,
     Query,
     QueryRequest,
     RangeFloat,
@@ -186,14 +189,25 @@ class Memory:
                 self.shard.flush()
             return len(ids)
 
-    def rename(self, label, new_label):
-        """Give every point wearing one label a different one. No vector moves.
+    def rename(self, label, new_label, text_vec=None):
+        """Give every point wearing one label a different one. No IMAGE vector
+        moves: what the object looks like did not change.
 
         The cure for Whisper mishearing a bare noun: the views were fine, only
         the word was wrong.
 
-        set_payload, not a re-upsert: UpdateOperation.upsert_points with an
-        existing id does NOT rewrite the point in this qdrant_edge build.
+        `text_vec` is the new name embedded, and passing it is what makes
+        RECALL follow the rename - `best_taught` searches transcripts, so
+        without it a renamed object is still hunted by the word Whisper got
+        wrong. Measured: `Poteso.` renamed to "potato" answered 'ask where is
+        Potato?' with the water bottle at 0.480, the object actually named
+        fifth at 0.427 in a 0.44-0.48 noise band; re-embedded it scores 0.860.
+        Taught points only - a sighting is image-only, and giving one a text
+        vector invents a transcript it never had.
+
+        set_payload / update_vectors, not a re-upsert:
+        UpdateOperation.upsert_points with an existing id does NOT rewrite the
+        point in this qdrant_edge build.
         """
         from qdrant_edge import ScrollRequest
         with self._lock:
@@ -204,6 +218,15 @@ class Memory:
             if ids:
                 self.shard.update(
                     UpdateOperation.set_payload(ids, {"label": new_label}))
+                if text_vec is not None:
+                    moved = set(ids)
+                    taught = [p.id for p in records
+                              if p.id in moved
+                              and p.payload.get("kind") == "taught"]
+                    if taught:
+                        self.shard.update(UpdateOperation.update_vectors(
+                            [PointVectors(pid, {"text": text_vec})
+                             for pid in taught]))
                 self.shard.flush()
             return len(ids)
 
@@ -388,22 +411,90 @@ class Memory:
             return None, top.score, top.payload.get("label")
         return None, top.score, None
 
-    def best_taught(self, text_vec):
-        """The taught object whose transcript best matches a question.
+    def names_in(self, question):
+        """Every taught label the question SAYS, newest-taught first - recall's
+        first step, and no vector is involved.
 
-        Recall's first step, and it searches the TEXT space: the question and
-        the transcript are both language, so they land near each other.
-        Searching the IMAGE space with the words of a question was measured and
-        dropped: it put every sighting of a day into one flat band, so the
-        answer was whichever object had been seen most.
+        A label is the operator's own word for a thing, so a question
+        containing it has already answered "which object": the caller narrows
+        the vector search to these, and nothing that was never named can win.
+        This exists because the taught text vector comes from the TRANSCRIPT,
+        which can say something else entirely - see `rename`. Matching the name
+        needs no re-embedding, so it also repairs shards written before that.
+
+        A LIST, not a winner. An earlier version returned the longest match,
+        ties by teach recency, and "did dylan take my smartphone?" answered
+        dylan - while the plain vector search it overrode answered smartphone
+        at 0.727, correctly. Handing the whole set to `best_taught` lets the
+        cosine choose among the things actually named, which is the one
+        comparison it is good at, and a junk label from a mis-teach merely
+        joins the candidates and loses.
+
+        Whole-word runs over both sides normalized to alphanumeric tokens, so
+        a label has to be said and not merely appear inside another word
+        (`mousepad` does not name `mouse`). A trailing "s" is optional on
+        tokens of four characters or more ("where are my bracelets" finds
+        `bracelet`); the length guard keeps that away from words an s changes
+        ("is", "as"). A one-token label under three characters names nothing -
+        a grunt transcribed `Is.` would otherwise appear in every question.
+
+        Labels come back spelled as the shard spells them: the caller filters
+        the shard by them.
         """
+        from qdrant_edge import ScrollRequest
+
+        def toks(text):
+            out = []
+            for w in re.split(r"[^0-9a-z]+", text.lower()):
+                if w:
+                    out.append(w[:-1] if len(w) >= 4 and w.endswith("s") else w)
+            return out
+
+        asked = toks(question)
         with self._lock:
-            hits = self.shard.query(QueryRequest(
-                query=Query.Nearest(text_vec, using="text"),
+            records, _ = self.shard.scroll(ScrollRequest(
+                limit=10000, with_payload=True,
                 filter=Filter(must=[
                     FieldCondition(key="kind",
                                    match=MatchValue(value="taught")),
-                ]),
+                ])))
+        hits = {}
+        for r in records:
+            label = r.payload.get("label") or ""
+            want = toks(label)
+            if not want or (len(want) == 1 and len(want[0]) < 3):
+                continue
+            if any(asked[i:i + len(want)] == want
+                   for i in range(len(asked) - len(want) + 1)):
+                ts = r.payload.get("ts") or 0
+                hits[label] = max(ts, hits.get(label, 0))
+        return [l for l, _ in sorted(hits.items(), key=lambda kv: -kv[1])]
+
+    def best_taught(self, text_vec, labels=None):
+        """The taught object whose transcript best matches a question.
+
+        Recall's second step, and its fallback. It searches the TEXT space:
+        the question and the transcript are both language, so they land near
+        each other. Searching the IMAGE space with the words of a question was
+        measured and dropped: it put every sighting of a day into one flat
+        band, so the answer was whichever object had been seen most.
+
+        `labels` narrows it to the objects the question NAMED (see `names_in`),
+        so the cosine only chooses among candidates a human actually said, and
+        picks the best VIEW of the one it settles on. An empty list is not a
+        filter - nothing was named, so everything is a candidate, exactly as
+        before. The score is an honest (often low) similarity against a
+        transcript that may say something else; it is displayed, never compared
+        against a threshold.
+        """
+        must = [FieldCondition(key="kind", match=MatchValue(value="taught"))]
+        if labels:
+            must.append(
+                FieldCondition(key="label", match=MatchAny(list(labels))))
+        with self._lock:
+            hits = self.shard.query(QueryRequest(
+                query=Query.Nearest(text_vec, using="text"),
+                filter=Filter(must=must),
                 limit=1,
                 with_payload=True,
             ))
@@ -437,8 +528,18 @@ class Memory:
             self.shard.flush()
             return len(ids)
 
-    def last_sightings(self, label, limit=3):
+    def last_sightings(self, label, limit=3, kinds=("seen",)):
         """The newest sightings of one object, as distinct occasions.
+
+        `kinds` widens what counts as an occasion. Recall passes
+        ("seen", "taught") because a teach IS an observation - it stamps a ts,
+        a `where` and a scene picture, and a human vouched for it - so an
+        object taught at 1:34 PM and not recognized since must not answer
+        "where did I leave it" with last week. The default must stay
+        ("seen",): `objects()` feeds the tab views and sightings separately,
+        so taught points in the second list would show every card its own
+        views twice, and the tab's display window has to keep matching
+        `forget_sighting_burst`'s delete window.
 
         A scroll and a sort, not a vector search: once the object is chosen,
         "where did I leave it" is a question about time. Deliberately not
@@ -450,11 +551,13 @@ class Memory:
         """
         from qdrant_edge import ScrollRequest
         with self._lock:
+            # still filtered server-side, now over a set of kinds: the scroll
+            # cap is a real cap, and letting every point through it would
+            # spend that budget on rows this can never return
             records, _ = self.shard.scroll(ScrollRequest(
                 limit=10000, with_payload=True,
                 filter=Filter(must=[
-                    FieldCondition(key="kind",
-                                   match=MatchValue(value="seen")),
+                    FieldCondition(key="kind", match=MatchAny(list(kinds))),
                 ])))
         rows = [r for r in records
                 if (r.payload.get("label") or "").lower() == label.lower()]

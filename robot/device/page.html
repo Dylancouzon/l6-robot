@@ -369,7 +369,9 @@
           im.style.opacity = 1; shot.append(im);
         }
         const col = el('div');
-        col.append(el('div', hit.when));
+        col.append(el('div', hit.when +
+          (hit.kind ? ' \u00b7 ' + (hit.kind === 'taught' ? 'taught' : 'seen')
+                    : '')));
         if (hit.where) col.append(el('div', hit.where, 'meta'));
         shot.append(col);
         s.append(shot);

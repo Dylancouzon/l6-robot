@@ -28,7 +28,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from robot import config
 from robot.brain import models
+from robot.brain.labels import norm_label
 from robot.device import mic
 from robot.device.draw import BG, INK, VIOLET, draw_feed, text
 from robot.device.server import StreamHandler, ensure_cert, lan_ip
@@ -69,7 +71,11 @@ def answer_line(res):
     if not s:
         return f"I know {res['label']}, but I haven't seen it around."
     p = s[0].payload
-    line = f"I saw {res['label']} at {_when(p['ts'])}"
+    # a teach and a recognition are both occasions but different claims, and
+    # blurring them is what made a stale answer unreadable: the operator could
+    # not tell "I recognized it there" from "you held it up in front of me"
+    verb = "You showed me" if p.get("kind") == "taught" else "I saw"
+    line = f"{verb} {res['label']} at {_when(p['ts'])}"
     if p.get("where"):
         line += f", in {p['where']}"
     if len(s) > 1:
@@ -79,14 +85,23 @@ def answer_line(res):
 
 
 def _hit_json(hit):
-    """One sighting row for the panel. No score: these come from a scroll
-    ordered by time, not a vector search."""
+    """One recall row for the panel. No score: these come from a scroll
+    ordered by time, not a vector search.
+
+    `kind` rides along because recall answers from taught views as well as
+    sightings, and "you showed me this" is not the same claim as "I spotted
+    this" - the row says which. The picture prefers `scene` for the reason
+    the memory tab does: a taught point's `thumb` is the masked gray crop CLIP
+    compares, not a picture a human recognizes.
+    """
     p = hit.payload
+    shot = p.get("scene") or p.get("thumb")
     return {
         "when": time.strftime("%b %-d, %H:%M", time.localtime(p["ts"])),
+        "kind": p.get("kind"),
         "label": p.get("label"),
         "where": p.get("where"),
-        "thumb": Path(p["thumb"]).name if p.get("thumb") else None,
+        "thumb": Path(shot).name if shot else None,
     }
 
 
@@ -147,6 +162,17 @@ class LiveApp:
             ok, frame = self.cap.read()
             if not ok:
                 break
+            if config.CAMERA_ROTATE == 180:
+                # The mount fix, and this is the only place it can go: one
+                # entry point for the camera, so the detector, the crops that
+                # get embedded, the scene pictures and the streamed view all
+                # agree about which way is up. Rotate any deeper and the feed
+                # and the memories would disagree.
+                # 0.77 ms median on a 1280x720 frame, against a 103 ms
+                # cap.read() - not something the pump can feel.
+                # Deliberately NOT in app.replay(): the testdata images are
+                # already upright, and score parity is measured against them.
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
             self.frame_at = time.monotonic()  # for _watchdog
             self.latest = frame
             self._render(frame, list(self.tracks), self.robot.attention)
@@ -400,9 +426,21 @@ class LiveApp:
         return n
 
     def rename(self, label, to):
-        """Rename one object, from the tab. No vector moves."""
+        """Rename one object, from the tab. No IMAGE vector moves.
+
+        The new name is embedded HERE, before the live-state lock, for the
+        reason the teach path transcribes before taking it: a cold Nomic load
+        is ~4 s of held GIL, and paying it under the lock stalls the detect
+        thread long enough for DEAD_SECONDS to delete live tracks. Warm it is
+        ~0.15 s. Normalized first, so the vector embeds exactly the string that
+        gets stored. `warm_text` and not `embed_text` alone: a cold build from
+        an HTTP thread would race a pointerdown warm and build Nomic twice.
+        """
+        to = norm_label(to)
+        models.warm_text()
+        text_vec = models.embed_text(to)
         with self.lock:
-            n = self.robot.rename(label, to)
+            n = self.robot.rename(label, to, text_vec=text_vec)
         self.banner = f'renamed to "{to}"'
         return n
 

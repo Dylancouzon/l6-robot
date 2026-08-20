@@ -23,13 +23,13 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_FILE, override=False)
 
 
-def _number(name, default):
+def _number(name, default, cast=float):
     """One calibration knob, with a legible error instead of a stack trace."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        return float(raw)
+        return cast(raw)
     except ValueError:
         raise SystemExit(
             f"{name} in {ENV_FILE.name} must be a number, got {raw!r}")
@@ -59,3 +59,20 @@ DETECT_MAX_AREA = _number("DETECT_MAX_AREA", 0.20)
 # the SQUARE of how big the thing looks, so 0.001 is only about 12% wider than
 # the 0.0008 this shipped with, not 25%.
 DETECT_MIN_AREA = _number("DETECT_MIN_AREA", 0.001)
+
+# -- camera ------------------------------------------------------------------
+
+# How the camera is mounted, in degrees. The appliance's camera is fixed
+# upside down in the chassis, so the unit's own .env says 180; a camera
+# sitting the right way up wants 0, which is why that is the default here.
+#
+# Only 0 and 180 are accepted. A quarter turn would swap the frame's width and
+# height, and the capture size, the page's video box and the scene pictures
+# are all written for a landscape frame — that is a different job from a mount
+# fix, so an unsupported value fails at startup instead of half-working.
+CAMERA_ROTATE = _number("CAMERA_ROTATE", 0, int)
+if CAMERA_ROTATE not in (0, 180):
+    raise SystemExit(
+        f"CAMERA_ROTATE in {ENV_FILE.name} must be 0 or 180, got "
+        f"{CAMERA_ROTATE}. A quarter turn would swap the frame's width and "
+        "height, which the rest of the app assumes is landscape.")

@@ -121,6 +121,20 @@ def warm_encoders():
         _text_model()        # teach stores a text vector; ask queries one
 
 
+def warm_text():
+    """Build ONLY the text encoder, under the same lock, for a caller that
+    embeds without transcribing.
+
+    The rename path needs Nomic and nothing else; dragging Whisper's ~2.7 s in
+    behind it (as `warm_encoders` would) is load a typed action never uses. The
+    lock is the point: `embed_text` takes none of its own, so a cold build
+    started from an HTTP thread while a pointerdown warm ran would build Nomic
+    twice at once - ~1 GB of transient extra on a board with none to spare.
+    """
+    with _warm_lock:
+        _text_model()
+
+
 def warm_up(progress=lambda name: None):
     """Load the one encoder the camera loop uses on every frame.
 
