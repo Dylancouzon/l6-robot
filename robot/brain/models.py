@@ -1,9 +1,8 @@
-"""The course's model stack: Nomic 768 (text), CLIP 512 (image), Whisper (speech).
+"""The model stack: Nomic 768 (text), CLIP 512 (image), Whisper (speech).
 
-Same models and the same FastEmbed and onnx-asr loaders as the course
-notebooks, on the versions pinned in pyproject.toml. The recognition threshold
-is calibrated against these exact encoders and the crop pipeline, so changing
-one means re-running testdata/verify_scores.py.
+FastEmbed and onnx-asr loaders, on the versions pinned in pyproject.toml. The
+recognition threshold is calibrated against these exact encoders and the crop
+pipeline, so changing one means re-running testdata/verify_scores.py.
 
 Every loader is cached and lazy: a model is built once, the first time
 something asks for it. That is what lets an 8 GB Jetson run this (see warm_up).

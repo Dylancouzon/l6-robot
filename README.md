@@ -4,7 +4,7 @@
 
 A robot that sees an object, learns its name from your voice, and remembers where it saw it. Everything runs on the Jetson Orin Nano: no cloud, no API key, no LLM. Recognition and recall use Qdrant Edge as an embedded vector search engine.
 
-This is the instructor demo for L6 of [Building On-Device AI Memory with Qdrant Edge](https://github.com/Dylancouzon/SC-Qdrant-C3), a DeepLearning.AI short course from Qdrant.
+Built for [Building On-Device AI Memory with Qdrant Edge](https://github.com/Dylancouzon/SC-Qdrant-C3), a DeepLearning.AI short course from Qdrant.
 
 ```text
 camera / mic -> detect -> embed -> match -> teach -> recall
@@ -52,7 +52,7 @@ uv run python -m robot.app
 
 That opens a browser view at `http://127.0.0.1:8765`. YOLO weights download on first run, along with about 1.5 GB of models.
 
-The values in `.env` are tuned for one specific camera. If recognition looks wrong, read [Calibrating For Your Camera](docs/calibration.md) before assuming the code is broken. To drive the robot from a phone, read [the phone demo](docs/phone.md).
+The values in `.env` are tuned for one specific camera. If recognition looks wrong, read [Calibrating For Your Camera](docs/calibration.md) before assuming the code is broken. To drive the robot from a phone, read [Driving It From A Phone](docs/phone.md).
 
 ## Controls
 
@@ -121,6 +121,6 @@ uv run python -m robot.app --source testdata/
 | Page | What is in it |
 |---|---|
 | [Calibrating For Your Camera](docs/calibration.md) | The recognition threshold, `verify_scores.py`, the `.env` knobs, and every flag |
-| [Phone Or Tablet Demo](docs/phone.md) | Running it from a phone, and the certificate |
-| [The Headless Appliance](docs/appliance.md) | The demo unit: setup, its own Wi-Fi, maintenance, and the Jetson notes |
+| [Driving It From A Phone](docs/phone.md) | Running it from a phone, and the certificate |
+| [The Headless Appliance](docs/appliance.md) | No keyboard, no screen: its own Wi-Fi, maintenance, and the Jetson notes |
 | [The Robot Body](docs/hardware.md) | What to buy, how to print it, and how to assemble it |

@@ -2,7 +2,7 @@
 
 ![The L6 robot: a printed shell with a camera behind its visor and an antenna on top](../assets/robot-render.gif)
 
-A 130 x 190 mm printed shell holds a Jetson on edge, one USB camera behind the eye, and an antenna on top. It is a filming and booth prop, not a consumer device.
+A 130 x 190 mm printed shell holds a Jetson on edge, one USB camera behind the eye, and an antenna on top. It is a desk prop, not a consumer device.
 
 - **Jetson Orin Nano Super 8 GB**, low in the shell, where its weight keeps the robot upright.
 - **A 37 x 37 mm USB (UVC, Universal Video Class) camera** as the eye. The printed tray is cut to that size, so measure yours before printing.

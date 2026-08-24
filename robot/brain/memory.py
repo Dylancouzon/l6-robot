@@ -1,7 +1,7 @@
 """The robot's memory: one Qdrant Edge shard, two named vectors.
 
-Same shape as the course's L5 assistant shard - `text` 768 (Nomic), `image`
-512 (CLIP), cosine - and the same nearest-match-against-a-threshold check.
+`text` 768 (Nomic), `image` 512 (CLIP), cosine, and a
+nearest-match-against-a-threshold check.
 
 Every point carries `kind`, which is the whole taxonomy:
 
