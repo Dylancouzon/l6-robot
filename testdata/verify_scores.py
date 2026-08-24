@@ -37,10 +37,9 @@ import cv2
 import numpy as np
 from fastembed import ImageEmbedding
 from PIL import Image
-from ultralytics import YOLO
 
 from robot.config import RECOGNIZE_THRESHOLD
-from robot.brain.detect import CONF, IMGSZ, padded_crop
+from robot.brain.detect import CONF, IMGSZ, Detector, padded_crop
 from robot.brain.models import CACHE_DIR, CLIP_VISION_MODEL, ENCODER_THREADS
 
 TESTDATA = Path(__file__).parent
@@ -52,13 +51,14 @@ def group_of(path):
     return re.sub(r"[_-]?\d+$", "", path.stem) or path.stem
 
 
-def detect_and_crop(model, path):
+def detect_and_crop(det, path):
     """The biggest proposal, cropped exactly as the live robot crops it."""
     frame = cv2.imread(str(path))
     if frame is None:
         return None
-    results = model.predict(frame, conf=CONF, imgsz=IMGSZ,
-                            agnostic_nms=True, verbose=False)[0]
+    results = det.model.predict(frame, device=det.device,
+                                quantize=det.quantize, conf=CONF, imgsz=IMGSZ,
+                                agnostic_nms=True, verbose=False)[0]
     boxes = results.boxes
     if boxes is None or len(boxes) == 0:
         print(f"  ! no detection for {path.name}, using the full image")
@@ -85,7 +85,10 @@ def main():
     if len(paths) < 2:
         raise SystemExit(f"need at least 2 images in {source}")
 
-    model = YOLO("yoloe-11l-seg-pf.pt")
+    # the app's own loader, not a second one: it decides the weights path, the
+    # device and the precision, and a calibration script that guesses any of
+    # them differently is calibrating something the robot does not run
+    det = Detector()
     # cache_dir, like the app: without it FastEmbed re-downloads 336 MB into
     # /tmp, which is both slow and a copy that /tmp's cleaner will delete.
     embedder = ImageEmbedding(CLIP_VISION_MODEL, threads=ENCODER_THREADS,
@@ -93,7 +96,7 @@ def main():
 
     crops, kept = {}, []
     for p in paths:
-        crop = detect_and_crop(model, p)
+        crop = detect_and_crop(det, p)
         if crop is not None and crop.size:
             crops[p] = crop
             kept.append(p)
