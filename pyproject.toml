@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     # The encoder stack is pinned to the same versions as the course, because
-    # the 0.80 recognition threshold is calibrated against these exact
+    # the 0.90 recognition threshold is calibrated against these exact
     # encoders. Changing one moves every score.
     "fastembed==0.8.0",
     "numpy==2.5.1",
@@ -21,7 +21,7 @@ dependencies = [
     # Ultralytics would pull Torch in transitively, letting a resolver pick the
     # build. Pin it instead: these are the versions the detector is tested on,
     # and the stock CUDA wheel is the one that runs on a Jetson Orin (see
-    # README, "Running on a Jetson Orin Nano").
+    # docs/appliance.md, "Running On A Jetson Orin Nano").
     "torch==2.13.0",
     "torchvision==0.28.0",
 ]

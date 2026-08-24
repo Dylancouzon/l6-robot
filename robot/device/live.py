@@ -691,7 +691,7 @@ class LiveApp:
             print("the browser will warn once (nothing vouches for a "
                   "self-signed cert): accept it and the mic will work.\n"
                   f"to silence it for good on your demo phone, open {url}"
-                  "/cert.crt and trust it - see the README.")
+                  "/cert.crt and trust it - see docs/phone.md.")
 
         try:
             self._splash("warming up...")

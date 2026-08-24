@@ -1,14 +1,14 @@
 # Calibrating For Your Camera
 
-**Symptom:** you teach one object and half the room starts matching it, just over the bar.
+**Symptom:** you teach one object, and half the room starts matching it just over the bar.
 
-Nothing is broken. The recognition threshold is a per-camera number, and the shipped default belongs to one specific camera in one specific room.
+Nothing is broken. The recognition threshold is a per-camera number. The shipped default belongs to one specific camera in one specific room.
 
 ## Why The Default Is Not Yours
 
-CLIP cosine similarity, a measure of how close two vectors point, does not behave like a percent from 0 to 1. Two unrelated crops from the same camera can routinely score 0.75 to 0.85, because they share lighting, sensor, background, and scale. `0.90` is not "90% confident". It is a point above that floor.
+CLIP cosine similarity, a measure of how close two vectors point in the same direction, does not behave like a percent from 0 to 1. Two unrelated crops from the same camera can routinely score 0.75 to 0.85 because they share lighting, sensor, background, and scale. `0.90` is not "90% confident". It is a point above that floor.
 
-Move the camera farther away and every crop gets smaller and softer, the floor rises, and a threshold that worked at arm's length starts matching the furniture.
+Move the camera farther away and every crop gets smaller and softer. The floor rises, and a threshold that worked at arm's length starts matching the furniture.
 
 ## Find Your Number
 
@@ -16,7 +16,7 @@ Move the camera farther away and every crop gets smaller and softer, the floor r
 uv run python testdata/verify_scores.py
 ```
 
-The script crops through the same code path the live robot uses and prints three things: the same-object and different-object score ranges, the margin between them, and a threshold sweep showing how many true matches survive at each candidate.
+The script crops images through the same code path the live robot uses. It prints three things: the same-object and different-object score ranges, the margin between them, and a threshold sweep showing how many true matches survive at each candidate.
 
 Put a value from the clean range into `.env` as `RECOGNIZE_THRESHOLD`.
 
@@ -26,15 +26,15 @@ To calibrate against your own scene, photograph two or three objects three times
 uv run python testdata/verify_scores.py --source ~/my-photos
 ```
 
-Separate photos of distinct objects score farther apart than a live cluttered scene does, so treat the script's answer as a floor and expect to raise it against the real thing.
+Separate photos of distinct objects score farther apart than a live cluttered scene does. Treat the script's answer as a floor, and expect to raise it against the real thing.
 
 If the margin comes out negative, no threshold can work and the crops are the problem. Get closer, add light, or fill more of the frame with the object.
 
 ## The Other Knobs In .env
 
-`DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame, which a prompt-free detector proposes freely for walls, desks, and whole rooms.
+`DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame. A prompt-free detector often proposes walls, desks, and whole rooms.
 
-`DETECT_MIN_AREA` drops the small far-away clutter that keeps stealing the unknown box from the thing you are holding up.
+`DETECT_MIN_AREA` drops small far-away clutter that can steal the unknown box from the thing you are holding up.
 
 Both are *areas*, so they move as the square of apparent size: going from `0.0008` to `0.001` raises the smallest tracked object by about 12% in width, not 25%.
 

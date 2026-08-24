@@ -5,7 +5,8 @@ code. A 1080p webcam a foot from the desk and a 720p USB camera across the
 room produce crops of different size and sharpness, and CLIP scores move with
 them — so the recognition threshold that separates "this is my mug" from
 "this is furniture" is not portable between machines. Calibrate it with
-`testdata/verify_scores.py`; the README walks through reading its output.
+`testdata/verify_scores.py`; docs/calibration.md walks through reading its
+output.
 
 Precedence, loosest to tightest: the defaults below, then `.env`, then a real
 exported environment variable, then a command-line flag. That order is what
