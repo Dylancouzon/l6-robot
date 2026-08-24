@@ -114,6 +114,27 @@ def _speak(res):
     return line
 
 
+def crop_edges(frame):
+    """Cut the lens's own black rim off the picture, per config.FRAME_CROP.
+
+    Beside the mount rotation for the same reason it is there: the camera
+    enters the app once, so the detector, the embedded crops, the scene
+    pictures and the streamed view all see the same picture. After the
+    rotation, not before, so the four fractions read the way the operator sees
+    the feed. Deliberately not in app.replay(): the testdata images are
+    finished pictures with no rim, and cropping them would move score parity.
+    """
+    left, top, right, bottom = config.FRAME_CROP
+    if not any(config.FRAME_CROP):
+        return frame
+    h, w = frame.shape[:2]
+    x1, y1 = int(w * left), int(h * top)
+    x2, y2 = w - int(w * right), h - int(h * bottom)
+    # a copy, not a view: a sliced frame is non-contiguous, and it goes on to
+    # cv2.imencode, the mask fill and the JPEG writers
+    return frame[y1:y2, x1:x2].copy()
+
+
 class LiveApp:
     def __init__(self, robot, camera=0, watchdog=0.0):
         self.robot = robot
@@ -173,6 +194,7 @@ class LiveApp:
                 # Deliberately NOT in app.replay(): the testdata images are
                 # already upright, and score parity is measured against them.
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
+            frame = crop_edges(frame)
             self.frame_at = time.monotonic()  # for _watchdog
             self.latest = frame
             self._render(frame, list(self.tracks), self.robot.attention)
