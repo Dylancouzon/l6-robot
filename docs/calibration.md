@@ -1,22 +1,22 @@
-# Calibrating For Your Camera
+# Calibrate the camera
 
-**Symptom:** you teach one object, and half the room starts matching it just over the bar.
+If you teach one object and half the room starts matching it, the recognition threshold is too low.
 
-Nothing is broken. The recognition threshold is a per-camera number. The shipped default belongs to one specific camera in one specific room.
+The recognition threshold depends on the camera, distance, and lighting. The default will not fit every setup.
 
-## Why The Default Is Not Yours
+## Why calibration matters
 
-CLIP cosine similarity, a measure of how close two vectors point in the same direction, does not behave like a percent from 0 to 1. Two unrelated crops from the same camera can routinely score 0.75 to 0.85 because they share lighting, sensor, background, and scale. `0.90` is not "90% confident". It is a point above that floor.
+CLIP cosine similarity measures how closely two vectors point in the same direction. It is not a percentage. Two unrelated crops from the same camera can score between 0.75 and 0.85 because they share the same lighting, sensor, background, and scale. A score of `0.90` does not mean "90% confident." It is simply a value above that common range.
 
 Move the camera farther away and every crop gets smaller and softer. The floor rises, and a threshold that worked at arm's length starts matching the furniture.
 
-## Find Your Number
+## Find a threshold
 
 ```bash
 uv run python testdata/verify_scores.py
 ```
 
-The script crops images through the same code path the live robot uses. It prints three things: the same-object and different-object score ranges, the margin between them, and a threshold sweep showing how many true matches survive at each candidate.
+The script crops images with the same code used by the live robot. It prints the score ranges for matching and unrelated objects, the gap between those ranges, and the results at several possible thresholds.
 
 Put a value from the clean range into `.env` as `RECOGNIZE_THRESHOLD`.
 
@@ -28,21 +28,19 @@ uv run python testdata/verify_scores.py --source ~/my-photos
 
 Separate photos of distinct objects score farther apart than a live cluttered scene does. Treat the script's answer as a floor, and expect to raise it against the real thing.
 
-If the margin comes out negative, no threshold can work and the crops are the problem. Get closer, add light, or fill more of the frame with the object.
+If the gap is negative, the two score ranges overlap and no threshold will separate them. Get closer, add light, or fill more of the frame with the object.
 
-## The Other Knobs In .env
+## Other settings in `.env`
 
 `DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame. A prompt-free detector often proposes walls, desks, and whole rooms.
 
 `DETECT_MIN_AREA` drops small far-away clutter that can steal the unknown box from the thing you are holding up.
 
-Both are *areas*, so they move as the square of apparent size: going from `0.0008` to `0.001` raises the smallest tracked object by about 12% in width, not 25%.
-
 `DETECT_CONF` is the detector's confidence floor. Raise it to track less clutter.
 
 ## Flags
 
-Every per-camera setting has a permanent home in `.env` and a flag that overrides it for one run, which is what you want while calibrating.
+Use flags to try settings for one run. Save the values that work in `.env`.
 
 | Flag | What it does |
 |---|---|
