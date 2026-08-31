@@ -59,6 +59,17 @@ def _fractions(name, default):
     return vals
 
 
+def _device(name):
+    """An optional sounddevice name or numeric index."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 # -- recognition -------------------------------------------------------------
 
 # Nearest taught view must score at least this to count as "I know that".
@@ -123,3 +134,7 @@ if FRAME_CROP[0] + FRAME_CROP[2] > 0.8 or FRAME_CROP[1] + FRAME_CROP[3] > 0.8:
     raise SystemExit(
         f"FRAME_CROP in {ENV_FILE.name} cuts away almost the whole frame: "
         f"{FRAME_CROP}")
+
+# -- microphone --------------------------------------------------------------
+
+MIC_DEVICE = _device("MIC_DEVICE")

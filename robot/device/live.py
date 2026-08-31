@@ -36,7 +36,8 @@ from robot.device.draw import BG, INK, VIOLET, draw_feed, text
 from robot.device.server import StreamHandler, ensure_cert, lan_ip
 
 PORT = 8765
-UTTERANCE_WAV = "/tmp/l6-utterance.wav"  # one buffer; `busy` serializes writes
+UTTERANCE_WAV = "/tmp/qdrant-memory-robot-utterance.wav"
+# One audio buffer is safe because `busy` serializes voice actions.
 # JPEG quality for the streamed feed. Turn it down only against a measurement
 # of your own scene - JPEG size depends far more on what the camera sees.
 STREAM_QUALITY = 85

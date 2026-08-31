@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Turn this machine into the robot appliance: no desktop, no peripherals, no
 # venue Wi-Fi. Idempotent — safe to re-run after editing anything here or in
-# deploy/l6-robot.service.
+# deploy/memory-robot.service.
 #
 #   sudo ./deploy/headless-setup.sh
 #
@@ -11,11 +11,13 @@
 # working internet connection.
 #
 # Afterwards: reboot, join the Wi-Fi network below from a phone, open the URL.
-# Undoing it is four commands, listed in the README under "Headless Appliance".
+# Maintenance and removal commands are in docs/appliance.md.
 set -euo pipefail
 
-SSID="${SSID:-l6-robot}"
+SSID="${SSID:-qdrant-memory}"
 PSK="${PSK:-qdrantedge}"          # WPA2 needs 8+ characters
+SERVICE_NAME="memory-robot"
+HOTSPOT_NAME="memory-robot-hotspot"
 # Fixed, deliberately not a knob: the unit's --advertise names this address in
 # the certificate, and the two disagreeing is the name-mismatch warning the
 # whole headless path exists to avoid.
@@ -26,14 +28,32 @@ AP_IP="10.42.0.1"
 BAND="a"
 CHANNEL="44"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UNIT="$REPO/deploy/l6-robot.service"
-# Read the account out of the unit rather than taking it as a knob: the unit
-# also pins WorkingDirectory to that home, and the two disagreeing means the
-# model cache gets warmed for a user the robot does not run as.
-USER_NAME="$(awk -F= '/^User=/{print $2}' "$UNIT")"
+UNIT="$REPO/deploy/memory-robot.service"
+USER_NAME="${ROBOT_USER:-${SUDO_USER:-}}"
 
 [[ $EUID -eq 0 ]] || { echo "run me with sudo" >&2; exit 1; }
-[[ -n "$USER_NAME" ]] || { echo "no User= in $UNIT" >&2; exit 1; }
+if [[ -z "$USER_NAME" || "$USER_NAME" == "root" ]]; then
+  echo "run with sudo from the robot account, or set ROBOT_USER" >&2
+  exit 1
+fi
+id "$USER_NAME" >/dev/null 2>&1 || {
+  echo "user does not exist: $USER_NAME" >&2
+  exit 1
+}
+USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+[[ -n "$USER_HOME" ]] || { echo "no home found for $USER_NAME" >&2; exit 1; }
+if [[ -z "${UV_BIN:-}" ]]; then
+  for candidate in "$USER_HOME/.local/bin/uv" /usr/local/bin/uv /usr/bin/uv; do
+    if [[ -x "$candidate" ]]; then
+      UV_BIN="$candidate"
+      break
+    fi
+  done
+fi
+[[ -x "${UV_BIN:-}" ]] || {
+  echo "uv not found; install it for $USER_NAME or set UV_BIN" >&2
+  exit 1
+}
 say() { printf '\n== %s\n' "$*"; }
 
 say "sshd — the only way into a box with no peripherals"
@@ -50,20 +70,36 @@ say "model cache — 1.1 GB the robot cannot re-download once it is offline"
 # Ethernet is plugged in. FastEmbed's default cache lives in /tmp, which
 # systemd-tmpfiles prunes; the app pins it under $HOME (robot/brain/models.py), so
 # fill it now — after this the robot boots with no network at all.
-sudo -u "$USER_NAME" -H env PATH="/home/$USER_NAME/.local/bin:$PATH" \
-  sh -c "cd '$REPO' && uv run --no-sync python -c '
+(
+cd "$REPO"
+sudo -u "$USER_NAME" -H env HOME="$USER_HOME" "$UV_BIN" \
+  run --no-sync python -c '
 from robot.brain import models
-models.warm_up(lambda n: print(\"  cached\", n))
+models.warm_up(lambda n: print("  cached", n))
 models._text_model(); models._asr_model()
-print(\"  cached speech and text encoders\")'"
+print("  cached speech and text encoders")'
+)
 
 say "service — start on boot, restart on failure, live whenever the box is on"
-install -m 644 "$UNIT" /etc/systemd/system/l6-robot.service
+escape_sed() { sed 's/[&|\\]/\\&/g' <<<"$1"; }
+rendered_unit="$(mktemp)"
+trap 'rm -f "$rendered_unit"' EXIT
+sed \
+  -e "s|@USER@|$(escape_sed "$USER_NAME")|g" \
+  -e "s|@HOME@|$(escape_sed "$USER_HOME")|g" \
+  -e "s|@REPO@|$(escape_sed "$REPO")|g" \
+  -e "s|@UV@|$(escape_sed "$UV_BIN")|g" \
+  "$UNIT" > "$rendered_unit"
+install -m 644 "$rendered_unit" "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
-systemctl enable l6-robot.service
+systemctl enable "$SERVICE_NAME.service"
+if systemctl is-enabled --quiet l6-robot.service 2>/dev/null; then
+  systemctl disable l6-robot.service
+  echo "disabled legacy l6-robot.service"
+fi
 # Deliberately not restarted here: a re-run must not take a live robot down
 # mid-demo. A changed unit waits until someone asks for it.
-echo "enabled (if the unit changed: systemctl restart l6-robot)"
+echo "enabled (if the unit changed: systemctl restart $SERVICE_NAME)"
 
 say "desktop — off, which frees about 1.5 GB on an 8 GB board"
 # Takes effect at the next boot; it deliberately does not kill your session now.
@@ -73,8 +109,8 @@ systemctl set-default multi-user.target
 say "Wi-Fi — the robot serves its own network, so it works anywhere"
 wifi_dev="$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2=="wifi"{print $1; exit}')"
 [[ -n "$wifi_dev" ]] || { echo "no wifi device found" >&2; exit 1; }
-if ! nmcli -t -f NAME con show | grep -qx l6-hotspot; then
-  nmcli con add type wifi ifname "$wifi_dev" con-name l6-hotspot ssid "$SSID" >/dev/null
+if ! nmcli -t -f NAME con show | grep -qx "$HOTSPOT_NAME"; then
+  nmcli con add type wifi ifname "$wifi_dev" con-name "$HOTSPOT_NAME" ssid "$SSID" >/dev/null
 fi
 # 5 GHz, not 2.4. The MJPEG feed is the whole demo and it wants ~13 Mbps; a
 # 2.4 GHz 20 MHz AP delivers 15-25 Mbps in an empty room and much less in a hall
@@ -86,7 +122,7 @@ fi
 # ssid is set here too, not only on create: without it, re-running with a new
 # SSID= would change the password and print the new name while the radio kept
 # broadcasting the old one.
-nmcli con modify l6-hotspot \
+nmcli con modify "$HOTSPOT_NAME" \
   802-11-wireless.ssid "$SSID" \
   802-11-wireless.mode ap \
   802-11-wireless.band "$BAND" 802-11-wireless.channel "$CHANNEL" \
@@ -102,13 +138,13 @@ nmcli con modify l6-hotspot \
 while IFS=: read -r uuid type; do
   [[ "$type" == "802-11-wireless" ]] || continue
   name="$(nmcli -g connection.id con show "$uuid")"
-  [[ "$name" != "l6-hotspot" ]] || continue
+  [[ "$name" != "$HOTSPOT_NAME" ]] || continue
   echo "  parking saved network: $name (autoconnect off)"
   nmcli con modify "$uuid" connection.autoconnect no
 done < <(nmcli -t -f UUID,TYPE con show)
 # Don't bounce an access point that is already serving: re-running this script
 # should not drop the phones currently connected to it.
-if nmcli -t -f NAME con show --active | grep -qx l6-hotspot; then
+if nmcli -t -f NAME con show --active | grep -qx "$HOTSPOT_NAME"; then
   # ...but say so when the profile no longer matches the air. A changed band or
   # channel only reaches the radio on a bounce, and the same silent-mismatch
   # trap as the ssid above applies: printing the new channel while the old one
@@ -123,12 +159,12 @@ if nmcli -t -f NAME con show --active | grep -qx l6-hotspot; then
      [[ -n "$live_ssid" && "$live_ssid" != "$SSID" ]]; then
     echo "hotspot is up as \"$live_ssid\" on channel $live_ch;"
     echo "  the profile now says \"$SSID\" on channel $CHANNEL"
-    echo "  to apply it (drops connected clients): nmcli con up l6-hotspot"
+    echo "  to apply it (drops connected clients): nmcli con up $HOTSPOT_NAME"
   else
     echo "hotspot already up"
   fi
 else
-  nmcli con up l6-hotspot >/dev/null
+  nmcli con up "$HOTSPOT_NAME" >/dev/null
 fi
 echo "hotspot: $SSID / $PSK at $AP_IP"
 
@@ -138,9 +174,9 @@ Done. Reboot, then from a phone:
   1. join Wi-Fi "$SSID", password "$PSK"
   2. open https://$AP_IP:8765
   3. accept the certificate once (or install it from https://$AP_IP:8765/cert.crt
-     to stop being asked — see the README)
+     to stop being asked — see docs/phone.md)
 
 Maintenance, from a laptop on the same Wi-Fi:
   ssh $USER_NAME@$AP_IP
-  journalctl -u l6-robot -f
+  journalctl -u $SERVICE_NAME -f
 EOF

@@ -7,9 +7,7 @@ capture goes through sounddevice.
 """
 import wave
 
-MIC_DEVICE = None  # None = system default input. To pick another device:
-                   # uv run python -c "import sounddevice; print(sounddevice.query_devices())"
-                   # and set this to the device index or name.
+from robot.config import MIC_DEVICE
 
 SPEECH_RMS = 200   # a 100 ms block above this counts as speech
 TRAIL_QUIET = 0.9  # seconds of quiet after speech before recording stops

@@ -1,4 +1,4 @@
-# Use a phone
+# Use a Phone
 
 The phone is the robot's whole interface: the screen, the microphone, and the buttons.
 
@@ -8,11 +8,11 @@ uv run python -m robot.app --host 0.0.0.0
 
 The app prints an HTTPS URL. Open it on the phone, accept the certificate warning, then hold the on-screen buttons to talk.
 
-## Why the browser shows a certificate warning
+## Why the Browser Shows a Certificate Warning
 
 Browsers only allow microphone access over a secure connection. The app therefore uses HTTPS and creates its own certificate on the first run. Because a public certificate authority did not issue it, the browser shows a warning.
 
-## Remove the warning from your phone
+## Remove the Warning From Your Phone
 
 On a phone you use with the robot often, install the certificate as trusted once:
 
@@ -24,7 +24,7 @@ On iOS the trust is system-wide, so every browser on the phone stops warning. Mi
 
 The certificate names the address it was generated for. It is regenerated whenever that address changes, so a phone you trusted on one network will warn again on another. On the [appliance](appliance.md) the address never changes, so the trust is permanent.
 
-## If the microphone prompt appears every time
+## If the Microphone Prompt Appears Every Time
 
 That prompt is the browser's, not the page's. The page asks once per visit and holds the microphone open.
 
@@ -32,13 +32,13 @@ That prompt is the browser's, not the page's. The page asks once per visit and h
 - Chrome on iOS has no setting for an individual site. The prompt stops once the certificate is installed and trusted.
 - Android Chrome remembers the permission once the certificate is trusted.
 
-## Why the recording indicator stays on
+## Why the Recording Indicator Stays On
 
 The page opens the microphone on your first touch and holds it while the tab lives, so the first word of a press is not clipped by the device opening. That is why the indicator stays lit. Close the tab to release it.
 
-## On a laptop
+## On a Laptop
 
-The `T` and `A` keys use the laptop's own microphone through `sounddevice`. If the wrong input is selected, set `MIC_DEVICE` in `robot/device/mic.py`. To list devices:
+The `T` and `A` keys use the laptop's own microphone through `sounddevice`. If the wrong input is selected, set `MIC_DEVICE` in `.env`. To list devices:
 
 ```bash
 uv run python -c "import sounddevice; print(sounddevice.query_devices())"

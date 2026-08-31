@@ -1,4 +1,4 @@
-<!doctype html><title>L6 Robot Memory</title>
+<!doctype html><title>Qdrant Edge Memory Robot</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
   /* Same palette as the boxes drawn on the feed (see the BGR constants). */
@@ -267,7 +267,7 @@
   };
   // The gauge starts at 0.5, not 0: unrelated crops from one camera share
   // lighting and scale and rarely score below it, so the interesting range is
-  // the top half. See "Calibrating For Your Camera" in the README.
+  // the top half. See docs/calibration.md.
   const pct = v => Math.max(0, Math.min(1, (v - 0.5) / 0.5)) * 100;
   // Fade a thumbnail out rather than clearing src, and only re-fetch when the
   // url actually changes: thumb filenames are stamped, so a re-set would be a

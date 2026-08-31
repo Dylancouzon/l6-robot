@@ -1,16 +1,16 @@
-# Calibrate the camera
+# Calibrate the Camera
 
 If you teach one object and half the room starts matching it, the recognition threshold is too low.
 
 The recognition threshold depends on the camera, distance, and lighting. The default will not fit every setup.
 
-## Why calibration matters
+## Why Calibration Matters
 
 CLIP cosine similarity measures how closely two vectors point in the same direction. It is not a percentage. Two unrelated crops from the same camera can score between 0.75 and 0.85 because they share the same lighting, sensor, background, and scale. A score of `0.90` does not mean "90% confident." It is simply a value above that common range.
 
 Move the camera farther away and every crop gets smaller and softer. The floor rises, and a threshold that worked at arm's length starts matching the furniture.
 
-## Find a threshold
+## Find a Threshold
 
 ```bash
 uv run python testdata/verify_scores.py
@@ -30,7 +30,7 @@ Separate photos of distinct objects score farther apart than a live cluttered sc
 
 If the gap is negative, the two score ranges overlap and no threshold will separate them. Get closer, add light, or fill more of the frame with the object.
 
-## Other settings in `.env`
+## Other Settings in `.env`
 
 `DETECT_MAX_AREA` drops boxes bigger than a fraction of the frame. A prompt-free detector often proposes walls, desks, and whole rooms.
 

@@ -60,7 +60,7 @@ CONFIG = EdgeConfig(
 
 
 class Memory:
-    """Store, recognize, recall - the L2-L5 lifecycle behind the robot."""
+    """Store taught views, recognize objects, and recall their sightings."""
 
     def __init__(self, data_dir, threshold=RECOGNIZE_THRESHOLD, where=None):
         self.threshold = threshold

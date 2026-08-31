@@ -59,7 +59,7 @@ def ensure_cert(ip):
     conf = root / "openssl.cnf"
     conf.write_text(
         "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-        "[dn]\nCN=l6-robot\n"
+        "[dn]\nCN=qdrant-edge-memory-robot\n"
         f"[ext]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName={want}\n")
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
@@ -125,7 +125,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-x509-ca-cert")
                 self.send_header("Content-Disposition",
-                                 'attachment; filename="l6-robot.crt"')
+                                 'attachment; filename="qdrant-memory-robot.crt"')
                 self.end_headers()
                 self.wfile.write(Path(self.cert).read_bytes())
             elif self.path == "/":

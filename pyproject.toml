@@ -1,5 +1,5 @@
 [project]
-name = "l6-robot"
+name = "qdrant-edge-memory-robot"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,8 +19,7 @@ dependencies = [
     "ultralytics>=8.4.96",
     # Ultralytics would pull Torch in transitively, letting a resolver pick the
     # build. Pin it instead: these are the versions the detector is tested on,
-    # and the stock CUDA wheel is the one that runs on a Jetson Orin (see
-    # docs/appliance.md, "Running On A Jetson Orin Nano").
+    # including the stock CUDA wheel used on the Jetson Orin.
     "torch==2.13.0",
     "torchvision==0.28.0",
 ]
