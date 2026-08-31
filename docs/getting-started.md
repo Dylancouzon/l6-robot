@@ -4,7 +4,7 @@ This guide runs the complete application with an ordinary computer, webcam, and 
 
 ## What You Need
 
-- macOS or Linux.
+- 64-bit Windows (x86), macOS, or Linux.
 - Python 3.12 or newer.
 - [uv](https://docs.astral.sh/uv/).
 - A webcam and microphone.
@@ -21,6 +21,8 @@ uv sync
 cp .env.example .env
 ```
 
+In Windows PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
+
 `uv sync` creates an isolated environment and installs the versions in `uv.lock`. The `.env` file holds settings that depend on your camera. Keep the defaults for the first run.
 
 ## Start the Robot
@@ -30,6 +32,8 @@ uv run python -m robot.app
 ```
 
 The application opens `http://127.0.0.1:8765`. Open that address manually if your browser does not appear. The first start downloads the detector, image encoder, text encoder, and speech model, so it takes longer than later starts.
+
+On Windows, allow Python through Windows Defender Firewall if prompted. Local use at `127.0.0.1` does not require network access; the firewall permission is only needed when serving the interface to another device with `--host 0.0.0.0`.
 
 If the wrong camera opens, stop with Ctrl-C and try another index:
 

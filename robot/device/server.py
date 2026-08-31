@@ -8,10 +8,11 @@ HTTP/1.0 is deliberate - each poll is its own connection. Moving to 1.1 would
 need an accurate Content-Length on every response or clients hang.
 """
 import json
+import ipaddress
 import socket
 import ssl
-import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -31,7 +32,7 @@ def lan_ip():
         s.close()
 
 
-def ensure_cert(ip):
+def ensure_cert(ip, root=None):
     """Self-signed certificate, so the phone browser treats the page as a
     secure context - getUserMedia refuses plain http. Returns (cert, key).
 
@@ -43,29 +44,55 @@ def ensure_cert(ip):
     * Validity under 825 days, or Safari refuses it outright.
     * CA:TRUE, so a phone can install it as a root once and stop warning.
 
-    Built with a config file rather than -addext, which the LibreSSL that
-    ships as /usr/bin/openssl on macOS does not have. Regenerated only when
-    the address changes, so a trusted phone stays trusted across restarts.
+    Generated in process so HTTPS works on a clean Windows installation as
+    well as macOS and Linux. Regenerated only when the address changes, so a
+    trusted phone stays trusted across restarts.
     """
-    root = Path(__file__).resolve().parents[2] / "cert"
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    root = Path(root) if root is not None else (
+        Path(__file__).resolve().parents[2] / "cert")
     cert, key, named = root / "cert.pem", root / "key.pem", root / "names.txt"
+    hostname = socket.gethostname().split(".")[0] + ".local"
     # localhost stays valid so the laptop view works off the same certificate
     want = ",".join([f"IP:{ip}", "IP:127.0.0.1", "DNS:localhost",
-                     f"DNS:{socket.gethostname().split('.')[0]}.local"])
+                     f"DNS:{hostname}"])
     if (cert.exists() and key.exists() and named.exists()
             and named.read_text() == want):
         return str(cert), str(key)
     root.mkdir(exist_ok=True)
-    conf = root / "openssl.cnf"
-    conf.write_text(
-        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-        "[dn]\nCN=qdrant-edge-memory-robot\n"
-        f"[ext]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName={want}\n")
-    subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-         "-keyout", str(key), "-out", str(cert), "-days", "397",
-         "-config", str(conf)],
-        check=True, capture_output=True)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "qdrant-edge-memory-robot"),
+    ])
+    now = datetime.now(timezone.utc)
+    san = x509.SubjectAlternativeName([
+        x509.IPAddress(ipaddress.ip_address(ip)),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+        x509.DNSName("localhost"),
+        x509.DNSName(hostname),
+    ])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=397))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None),
+                       critical=True)
+        .add_extension(san, critical=False)
+        .sign(private_key, hashes.SHA256())
+    )
+    key.write_bytes(private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
     named.write_text(want)
     print(f"generated a certificate for {ip} (valid 397 days)")
     return str(cert), str(key)

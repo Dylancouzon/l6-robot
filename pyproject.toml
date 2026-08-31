@@ -3,6 +3,9 @@ name = "qdrant-edge-memory-robot"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    # Generates the local HTTPS certificate without requiring an OpenSSL
+    # executable, which is not included with Windows.
+    "cryptography>=46.0.0",
     # The encoder stack is pinned exactly: the 0.90 recognition threshold is
     # calibrated against these exact encoders. Changing one moves every score.
     "fastembed==0.8.0",

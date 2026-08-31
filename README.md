@@ -30,12 +30,18 @@ You do not need to print the enclosure or own a Jetson to explore the code.
 
 ## Quick Start
 
-You need macOS or Linux, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), a webcam, and a microphone.
+You need Windows, macOS, or Linux, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), a webcam, and a microphone. Windows support targets 64-bit Windows on x86 processors.
 
 ```bash
 uv sync
 cp .env.example .env
 uv run python -m robot.app
+```
+
+On Windows PowerShell, replace the copy command with:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
 Open `http://127.0.0.1:8765`. The first run downloads about 1.5 GB of model files and takes longer than later starts.

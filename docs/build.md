@@ -28,7 +28,7 @@ The enclosure was designed around the Arducam IMX291 (B0200). Check the exact ca
 
 ## 2. Test the Software First
 
-Complete [Get Started](getting-started.md) on any available macOS or Linux computer. This confirms the application flow before the Jetson and printed parts add more variables.
+Complete [Get Started](getting-started.md) on any available Windows, macOS, or Linux computer. This confirms the application flow before the Jetson and printed parts add more variables.
 
 ## 3. Prepare the Jetson
 

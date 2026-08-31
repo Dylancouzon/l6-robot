@@ -33,10 +33,10 @@ from robot.brain import models
 from robot.brain.labels import norm_label
 from robot.device import mic
 from robot.device.draw import BG, INK, VIOLET, draw_feed, text
+from robot.device.runtime import UTTERANCE_WAV, stamp, when
 from robot.device.server import StreamHandler, ensure_cert, lan_ip
 
 PORT = 8765
-UTTERANCE_WAV = "/tmp/qdrant-memory-robot-utterance.wav"
 # One audio buffer is safe because `busy` serializes voice actions.
 # JPEG quality for the streamed feed. Turn it down only against a measurement
 # of your own scene - JPEG size depends far more on what the camera sees.
@@ -47,10 +47,7 @@ CROP_PX = 180   # the "sees now" thumbnail served at /crop.jpg
 def _when(ts):
     """A spoken timestamp. Today keeps just the clock; older sightings name
     the day, because "I saw it at 9:12 PM" is a lie by omission on Tuesday."""
-    t = time.localtime(ts)
-    if time.strftime("%Y%m%d", t) == time.strftime("%Y%m%d"):
-        return time.strftime("%-I:%M %p", t)
-    return time.strftime("%b %-d, %-I:%M %p", t)
+    return when(ts)
 
 
 def answer_line(res):
@@ -98,7 +95,7 @@ def _hit_json(hit):
     p = hit.payload
     shot = p.get("scene") or p.get("thumb")
     return {
-        "when": time.strftime("%b %-d, %H:%M", time.localtime(p["ts"])),
+        "when": stamp(p["ts"]),
         "kind": p.get("kind"),
         "label": p.get("label"),
         "where": p.get("where"),
@@ -400,8 +397,7 @@ class LiveApp:
             # would then ask to delete an id that does not exist and the view
             # would quietly survive its own deletion.
             "id": str(payload["id"]),
-            "when": time.strftime("%b %-d, %H:%M",
-                                  time.localtime(payload.get("ts") or 0)),
+            "when": stamp(payload.get("ts") or 0),
             "transcript": payload.get("transcript"),
             "where": payload.get("where"),
             "thumb": Path(thumb).name if thumb else None,
@@ -414,8 +410,7 @@ class LiveApp:
         rows = self.robot.memory.ignored()
         return {"ignored": [{
             "pid": str(r.id),
-            "when": time.strftime("%b %-d, %H:%M",
-                                  time.localtime(r.payload.get("ts") or 0)),
+            "when": stamp(r.payload.get("ts") or 0),
             "thumb": (Path(r.payload["thumb"]).name
                       if r.payload.get("thumb") else None),
         } for r in rows]}
