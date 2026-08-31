@@ -7,12 +7,12 @@ everything that is not video.
 HTTP/1.0 is deliberate - each poll is its own connection. Moving to 1.1 would
 need an accurate Content-Length on every response or clients hang.
 """
-import json
 import ipaddress
+import json
 import socket
 import ssl
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -33,20 +33,10 @@ def lan_ip():
 
 
 def ensure_cert(ip, root=None):
-    """Self-signed certificate, so the phone browser treats the page as a
-    secure context - getUserMedia refuses plain http. Returns (cert, key).
+    """Create or reuse the self-signed certificate required by phone audio.
 
-    Three details decide how loudly the browser complains:
-
-    * A subjectAltName for the address you actually open. Browsers stopped
-      reading the CN field in 2017, so a CN-only certificate names nothing,
-      which is a harsher warning that trusting it cannot fix.
-    * Validity under 825 days, or Safari refuses it outright.
-    * CA:TRUE, so a phone can install it as a root once and stop warning.
-
-    Generated in process so HTTPS works on a clean Windows installation as
-    well as macOS and Linux. Regenerated only when the address changes, so a
-    trusted phone stays trusted across restarts.
+    The certificate covers the advertised IP, localhost, and the local host
+    name. It is a CA certificate so a phone can trust it after installation.
     """
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -61,14 +51,14 @@ def ensure_cert(ip, root=None):
     want = ",".join([f"IP:{ip}", "IP:127.0.0.1", "DNS:localhost",
                      f"DNS:{hostname}"])
     if (cert.exists() and key.exists() and named.exists()
-            and named.read_text() == want):
+            and named.read_text(encoding="utf-8") == want):
         return str(cert), str(key)
     root.mkdir(exist_ok=True)
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "qdrant-edge-memory-robot"),
     ])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     san = x509.SubjectAlternativeName([
         x509.IPAddress(ipaddress.ip_address(ip)),
         x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
@@ -93,7 +83,7 @@ def ensure_cert(ip, root=None):
         serialization.PrivateFormat.TraditionalOpenSSL,
         serialization.NoEncryption()))
     cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    named.write_text(want)
+    named.write_text(want, encoding="utf-8")
     print(f"generated a certificate for {ip} (valid 397 days)")
     return str(cert), str(key)
 
@@ -111,17 +101,14 @@ class StreamHandler(BaseHTTPRequestHandler):
         return vals[0] if vals else default
 
     def _int(self, key, default):
-        """A non-negative integer query value; anything else is the default.
-        These arrive from a URL, and a typo should not be a traceback."""
+        """Parse a non-negative integer query value."""
         try:
             return max(0, int(self._query(key, default)))
         except (TypeError, ValueError):
             return default
 
     def _send_json(self, obj, status=200):
-        """Content-Length on every JSON reply, and never cached: a frozen panel
-        beside a moving video is horrible to diagnose in a room, and a stale
-        memory list would still offer an object that was just deleted."""
+        """Send a complete, non-cached JSON response."""
         body = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -146,9 +133,7 @@ class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if self.path.startswith("/cert.crt") and self.cert:
-                # Hand the certificate to the phone so it can be trusted once.
-                # This is the same certificate already on the wire, so serving
-                # it gives away nothing the TLS handshake does not.
+                # Let the phone install the same public certificate TLS serves.
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-x509-ca-cert")
                 self.send_header("Content-Disposition",

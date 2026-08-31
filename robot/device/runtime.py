@@ -4,7 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-
 # Use the platform's temporary directory instead of assuming a Unix /tmp.
 # The process id also keeps two simultaneously running robots from sharing a
 # recording, which matters on multi-user desktop machines.
@@ -18,7 +17,11 @@ def _clock(t):
 
 
 def when(ts, now=None):
-    """A spoken timestamp with no platform-specific strftime directives."""
+    """A spoken timestamp, with no platform-specific strftime directives.
+
+    Today keeps just the clock; older sightings name the day, because "I saw
+    it at 9:12 PM" is a lie by omission on Tuesday.
+    """
     t = time.localtime(ts)
     today = time.localtime(time.time() if now is None else now)
     clock = _clock(t)

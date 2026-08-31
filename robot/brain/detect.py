@@ -1,12 +1,7 @@
-"""Finding objects in a frame, and deciding when one is worth a memory lookup.
+"""Find and track objects before looking them up in memory.
 
-YOLOE (prompt-free) proposes boxes and masks; its class labels are discarded
-entirely. Detection finds *a thing*, memory decides *which* thing, and nothing
-in this file reads the detector's vocabulary.
-
-Cadence: a track has to be stable for a few frames before it is displayed,
-embedded or teachable, and it re-asks memory every couple of seconds rather
-than every frame.
+YOLOE supplies boxes and masks. The robot ignores its class labels because
+memory, not the detector, names objects.
 """
 import os
 import time
@@ -34,12 +29,8 @@ MAX_DET = 64
 STABLE_FRAMES = 3      # passes before a track is displayed or teachable
 REQUERY_SECONDS = 2.0  # how often a stable track re-asks memory
 
-# How long a track survives with no detection before it is deleted. This is
-# NOT the box's lifetime - the `frames` decay at the bottom of `process` hides
-# a box after two missed passes regardless. This only decides whether an object
-# comes back as ITSELF, keeping its label, note, thumbnail and vector. A real
-# object's confidence swings either side of DETECT_CONF, so short dropouts are
-# routine and a strict value here makes recognized objects return as strangers.
+# Keep track state across short detector dropouts. The `frames` counter below
+# hides a missed box sooner than this state expires.
 DEAD_SECONDS = 5.0
 
 PAD = 0.12          # crop margin; the mask removes the background anyway
@@ -91,8 +82,7 @@ class Track:
 
     def __init__(self, tid):
         self.tid = tid
-        # not a count of frames since birth: a capped credit that rises on a
-        # detection and decays on a miss. `stable` reads it, `process` moves it.
+        # A stability score that rises on detection and falls on a miss.
         self.frames = 0
         self.last_seen = 0.0
         self.last_query = 0.0
@@ -101,8 +91,7 @@ class Track:
         self.crop_q = 0.0
         self.salience = 0.0    # size x centrality: what the robot attends to
         self.label = None      # from memory, never from the detector
-        self.guess = None      # nearest taught label just under the bar,
-                               # for display only - never recognition
+        self.guess = None      # near match for display only
         self.note = None       # the taught transcript, recalled on match
         self.thumb = None      # the matched taught view, shown beside the crop
         self.score = 0.0
@@ -128,12 +117,12 @@ class Detector:
     def __init__(self, weights="yoloe-11l-seg-pf.pt", conf=CONF,
                  max_area=MAX_AREA):
         from pathlib import Path
-        from ultralytics import YOLO
+
         import torch
+        from ultralytics import YOLO
         self.conf = conf
         self.max_area = max_area
-        # resolve against the repo root, not the cwd: otherwise running from
-        # another directory silently re-downloads the 70 MB weights
+        # Reuse weights stored at the repository root from any working directory.
         repo_copy = Path(__file__).resolve().parents[2] / weights
         if not Path(weights).exists() and repo_copy.exists():
             weights = str(repo_copy)
@@ -145,14 +134,8 @@ class Detector:
         else:
             self.device = "cpu"
         self.tracks = {}
-        # Unknowns the operator dismissed, tid -> {"tid", "pid"}. Only the
-        # per-frame gate: the durable record is a kind="ignored" point in the
-        # shard, which is what re-suppresses the same-looking object after a
-        # restart, when these ids mean nothing. Each block carries the point id
-        # it came from so deleting that point can lift its blocks (unblock).
-        #
-        # Copy-on-write: mutators replace the dict rather than editing it, so a
-        # reader without the lock always iterates a consistent snapshot.
+        # Live track blocks. Persisted ignore vectors survive track-id changes.
+        # Replacing this dict gives lock-free readers a consistent snapshot.
         self._ignored = {}
 
     def warm(self):
@@ -165,7 +148,7 @@ class Detector:
     def ignore(self, tid, pid=None):
         """Stop tracking one object. Sticky per track id, so it stays dismissed
         however the detector flickers. `pid` names the shard point behind it."""
-        ignored = dict(self._ignored)  # mutate the copy, then publish it
+        ignored = dict(self._ignored)
         ignored[tid] = {"tid": tid, "pid": pid}
         self._ignored = ignored
         self.tracks.pop(tid, None)
@@ -218,10 +201,7 @@ class Detector:
                 if not MIN_AREA <= area <= self.max_area:
                     continue
                 t = self.tracks.setdefault(tid, Track(tid))
-                # capped one above the gate: enough to absorb a single blink,
-                # and no more. Every extra frame of credit is a frame where a
-                # departed object still has a box and a stale crop, and could
-                # be taught by mistake.
+                # One extra point of credit absorbs a single missed detection.
                 t.frames = min(t.frames + 1, STABLE_FRAMES + 1)
                 t.last_seen = now
                 t.box = box
@@ -244,10 +224,7 @@ class Detector:
                 if now - t.last_seen > DEAD_SECONDS:
                     del self.tracks[tid]
                 else:
-                    # Decay, don't reset. The detector blinks on single frames,
-                    # and resetting hides an established box for STABLE_FRAMES
-                    # more passes, which is most of the on-screen flicker. This,
-                    # not DEAD_SECONDS, is the box's lifetime.
+                    # Decay gradually so one missed detection does not flicker.
                     t.frames = max(0, t.frames - 1)
 
         return [t for t in self.tracks.values() if t.stable]

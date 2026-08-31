@@ -19,14 +19,33 @@ You do not need to print the enclosure or own a Jetson to explore the code.
 
 ## What the Robot Does
 
-- Hold **TEACH** and say, “This is my chair.” The robot stores the object, its name, and the current place and time.
+- Hold **TEACH** and say, "This is my chair." The robot stores the object, its name, and the current place and time.
 - Show the object again. The robot recognizes it and saves a sighting.
 - Open **MEMORY** to review, rename, or forget objects and individual views.
-- Hold **ASK** and ask, “When did you last see my chair?”
+- Hold **ASK** and ask, "When did you last see my chair?"
 
-<img src="assets/screens/recognize.png" alt="The robot recognizing objects in the camera view" width="300">
-<img src="assets/screens/memory.png" alt="The robot's saved object memories" width="300">
-<img src="assets/screens/recall.png" alt="The robot recalling where it saw an object" width="300">
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screens/live-recognition.jpg" alt="The robot recognizing a hat, smartphone, and backpack in its live camera view" width="100%"><br>
+      <sub><strong>Recognize objects</strong></sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screens/spoken-recall.jpg" alt="The robot answering where and when it last saw a watch" width="100%"><br>
+      <sub><strong>Recall sightings</strong></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screens/memory-library.jpg" alt="The robot's memory library showing learned objects and their saved views" width="100%"><br>
+      <sub><strong>Browse memories</strong></sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="assets/screens/memory-controls.jpg" alt="The robot's controls for renaming, forgetting, and tracking object memories" width="100%"><br>
+      <sub><strong>Manage memories</strong></sub>
+    </td>
+  </tr>
+</table>
 
 ## Quick Start
 
@@ -46,7 +65,7 @@ Copy-Item .env.example .env
 
 Open `http://127.0.0.1:8765`. The first run downloads about 1.5 GB of model files and takes longer than later starts.
 
-For the first interaction, hold an object near the center of the camera view. When its box becomes steady, hold **TEACH**, say “This is my object,” and release the button. See [Get Started](docs/getting-started.md) for the full walkthrough and common setup issues.
+For the first interaction, hold an object near the center of the camera view. When its box becomes steady, hold **TEACH**, say "This is my object," and release the button. See [Get Started](docs/getting-started.md) for the full walkthrough and common setup issues.
 
 ## How It Works
 
@@ -74,6 +93,7 @@ docs/             setup, build, architecture, and calibration guides
 deploy/           optional headless Jetson service and Wi-Fi setup
 hardware/         printable enclosure files
 testdata/         sample images and the calibration check
+tests/            unit tests for platform-specific helpers
 ```
 
 Start reading at `robot/brain/core.py`. The `Robot.process_frame` method connects detection, embedding, recognition, and sighting storage. The [architecture guide](docs/architecture.md) provides a guided reading order.

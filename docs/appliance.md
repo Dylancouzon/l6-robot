@@ -11,7 +11,7 @@ After the Jetson restarts:
 
 1. Join the network **`qdrant-memory`**, password **`qdrantedge`**.
 2. Open **`https://10.42.0.1:8765`**.
-3. Accept the certificate warning, or [install the certificate](phone.md#removing-the-warning-on-your-phone).
+3. Accept the certificate warning, or [install the certificate](phone.md#remove-the-warning-from-your-phone).
 
 Set your own network name and password by passing them to the script:
 

@@ -15,8 +15,6 @@ import threading
 import time
 from pathlib import Path
 
-from robot import config
-
 from qdrant_edge import (
     Distance,
     EdgeConfig,
@@ -35,20 +33,17 @@ from qdrant_edge import (
     UpdateOperation,
 )
 
+from robot import config
+
 # Per-camera, so it lives in .env and is overridable per run with --threshold.
 # Re-run testdata/verify_scores.py after any change to the encoders or crops.
 RECOGNIZE_THRESHOLD = config.RECOGNIZE_THRESHOLD
 
-# The "maybe" band under the bar: a nearest-taught score within this margin is
-# surfaced as a guess - an orange "hat?" box - instead of a bare UNKNOWN.
-# Display only. Nothing recognizes, logs a sighting or can be forgotten off a
-# guess, which is what makes showing the band safe when lowering the bar is not.
+# Scores just below the threshold appear as guesses in the UI. They never
+# count as recognition or create sightings.
 MAYBE_MARGIN = 0.05
 
-# One "occasion" of being seen: sightings of a label closer together than this
-# are one burst, shown as one row and deleted as one unit. Named once because
-# those two must agree - a display window wider than the delete window
-# resurrects rows that were just deleted.
+# Group nearby sightings into one occasion for both display and deletion.
 SIGHTING_APART = 600
 
 CONFIG = EdgeConfig(
@@ -65,24 +60,15 @@ class Memory:
     def __init__(self, data_dir, threshold=RECOGNIZE_THRESHOLD, where=None):
         self.threshold = threshold
         self.dir = Path(data_dir)
-        # Serializes every shard access, including reopen and close. This is
-        # what lets the memory tab read the shard without the app's live-state
-        # lock, which the detect thread holds for a whole detection pass.
-        # An RLock because compound reads nest (objects -> count_sightings).
+        # Compound reads call other locked methods, so this must be an RLock.
         self._lock = threading.RLock()
-        # The place stamped on every write. --location wins for the run;
-        # otherwise the file the memory tab's SET LOCATION button writes. It
-        # lives beside the shard because it is state that travels with the
-        # memories, not per-camera calibration.
+        # Location travels with the memories rather than camera calibration.
         self._where_file = self.dir / "where.txt"
         if where is None and self._where_file.exists():
-            where = self._where_file.read_text().strip() or None
+            where = self._where_file.read_text(encoding="utf-8").strip() or None
         self.where = where
-        # A shard is present if its segments are. The glob makes an
-        # unrecognized non-empty directory fail loudly in load() rather than
-        # being silently built over - but the two things this app puts beside
-        # the shard must not count, or a directory holding only them turns into
-        # a load() of nothing that crashes every boot.
+        # Load any existing shard directory, but ignore files this app stores
+        # alongside a shard when deciding whether one exists.
         others = [p for p in self.dir.glob("*")
                   if p.name not in ("thumbs", "where.txt")]
         if (self.dir / "segments").exists() or others:
@@ -97,10 +83,8 @@ class Memory:
                 self.shard.update(
                     UpdateOperation.create_field_index(key, schema)
                 )
-        # Ids are seeded from a nanosecond clock so they stay unique across
-        # restarts without scanning the shard for the highest one. They land
-        # around 1.8e18, which is past JavaScript's safe integer range - see
-        # LiveApp._view_json, which sends them to the page as strings.
+        # Clock-based IDs avoid a shard scan. The UI sends them as strings
+        # because they exceed JavaScript's safe integer range.
         self._ids = itertools.count(time.time_ns())
 
     def close(self):
@@ -114,17 +98,11 @@ class Memory:
             self.shard = EdgeShard.load(str(self.dir))
 
     def set_where(self, place):
-        """Set or clear the place stamped on writes from now on.
-
-        Existing points keep the place they were written at, which is the
-        point: "where are my keys" should answer where it saw them. Persisted
-        beside the shard so it survives the power cut that is the appliance's
-        off switch.
-        """
+        """Set the place on future writes without changing existing memories."""
         place = " ".join((place or "").split())[:60] or None
         with self._lock:
             self.where = place
-            self._where_file.write_text(place or "")
+            self._where_file.write_text(place or "", encoding="utf-8")
         return place
 
     def count(self):
@@ -140,23 +118,16 @@ class Memory:
             self.shard.update(UpdateOperation.upsert_points([
                 Point(id=pid, vector=vector, payload=payload)
             ]))
-            # Flushed immediately: pulling the plug is the documented off
-            # switch, so nothing may sit in the WAL waiting for a clean close.
+            # The appliance may lose power without a clean shutdown.
             self.shard.flush()
             return pid
 
     def teach(self, image_vec, text_vec, label, transcript, ts=None, thumb=None,
               scene=None):
-        """One point carrying both named vectors: searchable by sight and words.
+        """Store a view with image and text vectors.
 
-        `thumb` is the masked crop recognition compares. `scene` is the object
-        as the camera saw it - the box plus a margin, unmasked - which is what
-        the memory tab shows, because a gray masked cut-out is not something a
-        human can identify their own object from.
-
-        Re-teaching the same object adds a second point rather than replacing
-        one. That is deliberate: recognition matches the nearest view, so more
-        views is how an object gets recognized from more angles.
+        Re-teaching adds another view so recognition can match more angles.
+        `thumb` is the masked recognition crop; `scene` is the UI image.
         """
         return self._upsert(
             {"image": image_vec, "text": text_vec},
@@ -172,14 +143,10 @@ class Memory:
         )
 
     def forget(self, label):
-        """Delete every point for a label, taught views and sightings alike.
-
-        Case-folded, like every label comparison here, so a shard written
-        before labels were lowercased still forgets whole objects.
-        """
+        """Delete all taught views and sightings for a label, case-insensitively."""
         from qdrant_edge import ScrollRequest
         with self._lock:
-            # ponytail: full scan, fine at demo scale (tens-hundreds of points)
+            # A full scan is acceptable at the robot's small scale.
             records, _ = self.shard.scroll(
                 ScrollRequest(limit=10000, with_payload=True))
             ids = [p.id for p in records
@@ -190,24 +157,10 @@ class Memory:
             return len(ids)
 
     def rename(self, label, new_label, text_vec=None):
-        """Give every point wearing one label a different one. No IMAGE vector
-        moves: what the object looks like did not change.
+        """Rename an object and optionally replace its taught text vectors.
 
-        The cure for Whisper mishearing a bare noun: the views were fine, only
-        the word was wrong.
-
-        `text_vec` is the new name embedded, and passing it is what makes
-        RECALL follow the rename - `best_taught` searches transcripts, so
-        without it a renamed object is still hunted by the word Whisper got
-        wrong. Measured: `Poteso.` renamed to "potato" answered 'ask where is
-        Potato?' with the water bottle at 0.480, the object actually named
-        fifth at 0.427 in a 0.44-0.48 noise band; re-embedded it scores 0.860.
-        Taught points only - a sighting is image-only, and giving one a text
-        vector invents a transcript it never had.
-
-        set_payload / update_vectors, not a re-upsert:
-        UpdateOperation.upsert_points with an existing id does NOT rewrite the
-        point in this qdrant_edge build.
+        Sightings have no text vector. Existing points are updated in place
+        because this Qdrant Edge version does not replace them by upserting.
         """
         from qdrant_edge import ScrollRequest
         with self._lock:
@@ -270,11 +223,7 @@ class Memory:
         )
 
     def ignore(self, image_vec, thumb=None, ts=None):
-        """Persist one dismissal: what the ignored crop looked like.
-
-        This is what makes IGNORE survive a restart. Track ids restart from 1
-        every run, so the vector is the only durable name the object has.
-        """
+        """Store an ignored crop so the dismissal survives a restart."""
         return self._upsert(
             {"image": image_vec},
             {
@@ -286,11 +235,7 @@ class Memory:
         )
 
     def unignore(self, pid):
-        """Delete one ignored point, verified against the shard first.
-
-        The id arrives from a page that may be stale, and an id belonging to
-        something else must not be deletable through this door.
-        """
+        """Delete an ignored point after checking its kind."""
         with self._lock:
             if pid not in [r.id for r in self.ignored()]:
                 return False
@@ -312,12 +257,7 @@ class Memory:
         return records
 
     def match_ignored(self, image_vec):
-        """Nearest ignored crop against the same threshold recognition uses.
-
-        Only consulted for tracks that did NOT match a taught object, so a
-        taught label always beats an ignore: a degenerate ignored crop can at
-        worst hide unknown clutter, never something deliberately taught.
-        """
+        """Find an ignored crop using the recognition threshold."""
         with self._lock:
             hits = self.shard.query(QueryRequest(
                 query=Query.Nearest(image_vec, using="image"),
@@ -345,12 +285,7 @@ class Memory:
                 ])))
 
     def objects(self):
-        """Every taught object, newest first: one entry per label, all its views.
-
-        What the memory tab lists, and the answer to "what do you know?".
-        Grouped in Python and case-folded the same way forget is, so the tab's
-        idea of one object matches its delete button's idea of one object.
-        """
+        """Return taught objects newest first, grouped case-insensitively."""
         from qdrant_edge import ScrollRequest
         # the whole grouping under one lock hold, so a REBOOT cannot swap the
         # shard out between the scroll and the per-label counts
@@ -366,19 +301,15 @@ class Memory:
                 label = r.payload.get("label") or ""
                 g = groups.setdefault(label.lower(),
                                       {"label": label, "views": []})
-                # the id rides along so the tab can drop one bad view without
-                # taking the object's good ones with it
+                # Include the ID so the UI can delete one view.
                 g["views"].append(dict(r.payload, id=r.id))
             out = []
             for g in groups.values():
                 g["views"].sort(key=lambda p: p.get("ts") or 0, reverse=True)
-                # display the newest view's spelling, since a re-teach wrote it
+                # Use the capitalization from the newest view.
                 g["label"] = g["views"][0].get("label") or g["label"]
                 g["seen"] = self.count_sightings(g["label"])
-                # The robot's own photos, which recall answers with. Uncapped
-                # on purpose: this list is what DROP works through, and behind
-                # a cap deleting one row just slides the next one in, which
-                # reads as a delete that did nothing.
+                # Keep all sightings available because each can be deleted.
                 g["sightings"] = [dict(r.payload, id=r.id) for r in
                                   self.last_sightings(g["label"], limit=None)]
                 out.append(g)
@@ -412,34 +343,12 @@ class Memory:
         return None, top.score, None
 
     def names_in(self, question):
-        """Every taught label the question SAYS, newest-taught first - recall's
-        first step, and no vector is involved.
+        """Return taught labels that appear as words in a question.
 
-        A label is the operator's own word for a thing, so a question
-        containing it has already answered "which object": the caller narrows
-        the vector search to these, and nothing that was never named can win.
-        This exists because the taught text vector comes from the TRANSCRIPT,
-        which can say something else entirely - see `rename`. Matching the name
-        needs no re-embedding, so it also repairs shards written before that.
-
-        A LIST, not a winner. An earlier version returned the longest match,
-        ties by teach recency, and "did dylan take my smartphone?" answered
-        dylan - while the plain vector search it overrode answered smartphone
-        at 0.727, correctly. Handing the whole set to `best_taught` lets the
-        cosine choose among the things actually named, which is the one
-        comparison it is good at, and a junk label from a mis-teach merely
-        joins the candidates and loses.
-
-        Whole-word runs over both sides normalized to alphanumeric tokens, so
-        a label has to be said and not merely appear inside another word
-        (`mousepad` does not name `mouse`). A trailing "s" is optional on
-        tokens of four characters or more ("where are my bracelets" finds
-        `bracelet`); the length guard keeps that away from words an s changes
-        ("is", "as"). A one-token label under three characters names nothing -
-        a grunt transcribed `Is.` would otherwise appear in every question.
-
-        Labels come back spelled as the shard spells them: the caller filters
-        the shard by them.
+        Matching ignores case and a trailing plural "s" on longer words.
+        One-token labels shorter than three characters are skipped to avoid
+        common transcription noise. The caller uses every match as a candidate
+        for semantic search.
         """
         from qdrant_edge import ScrollRequest
 
@@ -471,21 +380,10 @@ class Memory:
         return [l for l, _ in sorted(hits.items(), key=lambda kv: -kv[1])]
 
     def best_taught(self, text_vec, labels=None):
-        """The taught object whose transcript best matches a question.
+        """Find the taught transcript closest to a question vector.
 
-        Recall's second step, and its fallback. It searches the TEXT space:
-        the question and the transcript are both language, so they land near
-        each other. Searching the IMAGE space with the words of a question was
-        measured and dropped: it put every sighting of a day into one flat
-        band, so the answer was whichever object had been seen most.
-
-        `labels` narrows it to the objects the question NAMED (see `names_in`),
-        so the cosine only chooses among candidates a human actually said, and
-        picks the best VIEW of the one it settles on. An empty list is not a
-        filter - nothing was named, so everything is a candidate, exactly as
-        before. The score is an honest (often low) similarity against a
-        transcript that may say something else; it is displayed, never compared
-        against a threshold.
+        When `labels` is nonempty, only those explicitly named objects are
+        candidates. This score is displayed but has no acceptance threshold.
         """
         must = [FieldCondition(key="kind", match=MatchValue(value="taught"))]
         if labels:
@@ -501,13 +399,7 @@ class Memory:
         return hits[0] if hits else None
 
     def forget_sighting_burst(self, pid):
-        """Delete one sighting and the burst it stands for. Returns how many.
-
-        Rows are burst-collapsed everywhere they are shown, so deleting only
-        the tapped point does nothing visible: the next near-identical frame
-        slides into its slot. The unit of deletion has to be the unit of
-        display. The label comes from the point itself, never the caller.
-        """
+        """Delete the sighting occasion represented by one point."""
         from qdrant_edge import ScrollRequest
         with self._lock:
             records, _ = self.shard.scroll(ScrollRequest(
@@ -529,31 +421,14 @@ class Memory:
             return len(ids)
 
     def last_sightings(self, label, limit=3, kinds=("seen",)):
-        """The newest sightings of one object, as distinct occasions.
+        """Return the newest sightings, grouping nearby writes into occasions.
 
-        `kinds` widens what counts as an occasion. Recall passes
-        ("seen", "taught") because a teach IS an observation - it stamps a ts,
-        a `where` and a scene picture, and a human vouched for it - so an
-        object taught at 1:34 PM and not recognized since must not answer
-        "where did I leave it" with last week. The default must stay
-        ("seen",): `objects()` feeds the tab views and sightings separately,
-        so taught points in the second list would show every card its own
-        views twice, and the tab's display window has to keep matching
-        `forget_sighting_burst`'s delete window.
-
-        A scroll and a sort, not a vector search: once the object is chosen,
-        "where did I leave it" is a question about time. Deliberately not
-        day-filtered - keys left yesterday are the whole use case.
-
-        The burst collapse is what makes the second and third rows carry any
-        information: a sighting is written per track birth, so an object
-        sitting in view produces the same moment over and over.
+        Recall includes taught points because teaching also records a known
+        time and place. The memory tab uses the default of sightings only.
         """
         from qdrant_edge import ScrollRequest
         with self._lock:
-            # still filtered server-side, now over a set of kinds: the scroll
-            # cap is a real cap, and letting every point through it would
-            # spend that budget on rows this can never return
+            # Filter by kind before applying the scroll limit.
             records, _ = self.shard.scroll(ScrollRequest(
                 limit=10000, with_payload=True,
                 filter=Filter(must=[
@@ -573,11 +448,7 @@ class Memory:
         return out
 
     def seen_since(self, since_ts, limit=4):
-        """Distinct objects sighted since a time, newest row each.
-
-        The answer to "what did you see today?": an inventory is a time
-        filter, not a search, so no vectors are involved.
-        """
+        """Return the latest sighting of each object since a timestamp."""
         from qdrant_edge import ScrollRequest
         with self._lock:
             records, _ = self.shard.scroll(ScrollRequest(

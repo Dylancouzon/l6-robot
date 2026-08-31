@@ -44,11 +44,11 @@ uv run python -m robot.app --camera 1
 ## Teach and Recall an Object
 
 1. Hold one object near the center of the frame until its box becomes steady. The thickest box is the current target.
-2. Hold **TEACH** or the `T` key, say “This is my mug,” and release it.
+2. Hold **TEACH** or the `T` key, say "This is my mug," and release it.
 3. Turn the object and teach it two more times. Each teaching adds another view instead of replacing the first.
 4. Move the object out of view, then show it again. Its box should display the name you taught.
 5. Open **MEMORY** to inspect the taught views and later sightings.
-6. Hold **ASK** or the `A` key and ask, “When did you last see my mug?”
+6. Hold **ASK** or the `A` key and ask, "When did you last see my mug?"
 
 Speak a short sentence instead of a single noun. Whisper has more context to transcribe, and Qdrant can later match questions against the full sentence.
 
@@ -76,6 +76,12 @@ uv run python -m robot.app --source testdata/
 
 With an empty memory, the images correctly print as `UNKNOWN`. This is a software smoke test, not a recognition accuracy test.
 
+The unit tests cover small platform-specific helpers without loading the models:
+
+```bash
+uv run python -m unittest discover -s tests -t .
+```
+
 ## Where Data Lives
 
 The local Qdrant Edge shard and its thumbnails live in `edge-data/`. This directory is ignored by Git. Start once with an empty shard by adding `--reset`:
@@ -90,11 +96,15 @@ uv run python -m robot.app --reset
 
 ### The Robot Matches Too Many Objects
 
-Your camera needs a higher recognition threshold. Follow [Calibrate the Camera](calibration.md). A score of `0.90` is a cosine similarity threshold, not “90% confident.”
+Your camera needs a higher recognition threshold. Follow [Calibrate the Camera](calibration.md). A score of `0.90` is a cosine similarity threshold, not "90% confident."
 
 ### The Robot Misses Different Angles
 
 Teach the same object two or three times while turning it. Recognition searches for the nearest taught view, so each additional view covers another appearance.
+
+### The Camera Does Not Open
+
+The application stops with `camera 0 did not open` if another program has the camera or the operating system blocks access. Close video calls and browser tabs that use the camera, then check camera permissions. On Windows, open Settings > Privacy & security > Camera. On macOS, open System Settings > Privacy & Security > Camera. If you have more than one camera, try `--camera 1`.
 
 ### The Wrong Microphone Is Used
 

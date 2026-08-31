@@ -38,7 +38,7 @@ Use these settings:
 
 - PLA, 0.4 mm nozzle, 0.2 mm layers, three walls, and 15% infill.
 - Add a brim to the shell, keel, visor, and antenna.
-- Add support only below the keel’s camera head. Use a dense support interface.
+- Add support only below the keel's camera head. Use a dense support interface.
 - Check the slicer preview of the camera window. Its sloped roof must bridge cleanly so it does not block the camera connectors.
 
 The largest plate is 177 × 176 mm. Printing all parts takes about a day and a half.

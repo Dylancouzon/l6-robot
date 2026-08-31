@@ -38,6 +38,12 @@ If the gap is negative, the two score ranges overlap and no threshold will separ
 
 `DETECT_CONF` is the detector's confidence floor. Raise it to track less clutter.
 
+`CAMERA_ROTATE` is `0` for an upright camera and `180` for an upside-down one. Set it before teaching anything: CLIP scores a rotated crop as a different object.
+
+`FRAME_CROP` removes a lens's black rim from the camera image. Use one fraction for every edge, or four in `left,top,right,bottom` order.
+
+`MIC_DEVICE` picks an input by name or index when the wrong microphone opens.
+
 ## Flags
 
 Use flags to try settings for one run. Save the values that work in `.env`.

@@ -1,15 +1,8 @@
-"""The live app: camera, threads, buttons, and what the panel says.
+"""Camera, browser UI, and worker threads for the live robot.
 
-Four threads, and the split between them is the whole performance story:
-
-    main        pull frames, draw boxes, encode the JPEG. Takes NO lock.
-    detect      run the detector and match memory. Holds the live-state lock
-                for a whole pass, which is why nothing else may wait on it.
-    keys        one thread, so two taps on a button run in order.
-    voice       one per action, so the feed never freezes while Whisper thinks.
-
-Lock order is always the app's live-state lock, then the memory lock. Never
-the reverse.
+The main thread renders frames. Separate workers handle detection, ordered
+button presses, and voice actions. Code that needs both locks takes the app
+lock before the memory lock.
 """
 import os
 import queue
@@ -37,25 +30,13 @@ from robot.device.runtime import UTTERANCE_WAV, stamp, when
 from robot.device.server import StreamHandler, ensure_cert, lan_ip
 
 PORT = 8765
-# One audio buffer is safe because `busy` serializes voice actions.
-# JPEG quality for the streamed feed. Turn it down only against a measurement
-# of your own scene - JPEG size depends far more on what the camera sees.
+# `busy` ensures that only one voice action uses the shared audio file.
 STREAM_QUALITY = 85
 CROP_PX = 180   # the "sees now" thumbnail served at /crop.jpg
 
 
-def _when(ts):
-    """A spoken timestamp. Today keeps just the clock; older sightings name
-    the day, because "I saw it at 9:12 PM" is a lie by omission on Tuesday."""
-    return when(ts)
-
-
 def answer_line(res):
-    """The sentence recall answers with. Every value in it is a live payload.
-
-    Built separately from speaking it, because the panel shows it too: the
-    Jetson has no audio hardware, so on the appliance this line IS the answer.
-    """
+    """Build the recall sentence shown in the panel and spoken when possible."""
     s = res["sightings"]
     if res["inventory"]:
         if not s:
@@ -69,29 +50,19 @@ def answer_line(res):
     if not s:
         return f"I know {res['label']}, but I haven't seen it around."
     p = s[0].payload
-    # a teach and a recognition are both occasions but different claims, and
-    # blurring them is what made a stale answer unreadable: the operator could
-    # not tell "I recognized it there" from "you held it up in front of me"
+    # Teaching and later recognition describe different events.
     verb = "You showed me" if p.get("kind") == "taught" else "I saw"
-    line = f"{verb} {res['label']} at {_when(p['ts'])}"
+    line = f"{verb} {res['label']} at {when(p['ts'])}"
     if p.get("where"):
         line += f", in {p['where']}"
     if len(s) > 1:
         line += ". Before that at " + " and ".join(
-            _when(h.payload["ts"]) for h in s[1:])
+            when(h.payload["ts"]) for h in s[1:])
     return line + "."
 
 
 def _hit_json(hit):
-    """One recall row for the panel. No score: these come from a scroll
-    ordered by time, not a vector search.
-
-    `kind` rides along because recall answers from taught views as well as
-    sightings, and "you showed me this" is not the same claim as "I spotted
-    this" - the row says which. The picture prefers `scene` for the reason
-    the memory tab does: a taught point's `thumb` is the masked gray crop CLIP
-    compares, not a picture a human recognizes.
-    """
+    """Convert one time-ordered recall result for the panel."""
     p = hit.payload
     shot = p.get("scene") or p.get("thumb")
     return {
@@ -113,23 +84,14 @@ def _speak(res):
 
 
 def crop_edges(frame):
-    """Cut the lens's own black rim off the picture, per config.FRAME_CROP.
-
-    Beside the mount rotation for the same reason it is there: the camera
-    enters the app once, so the detector, the embedded crops, the scene
-    pictures and the streamed view all see the same picture. After the
-    rotation, not before, so the four fractions read the way the operator sees
-    the feed. Deliberately not in app.replay(): the testdata images are
-    finished pictures with no rim, and cropping them would move score parity.
-    """
+    """Remove the configured lens rim from a live camera frame."""
     left, top, right, bottom = config.FRAME_CROP
     if not any(config.FRAME_CROP):
         return frame
     h, w = frame.shape[:2]
     x1, y1 = int(w * left), int(h * top)
     x2, y2 = w - int(w * right), h - int(h * bottom)
-    # a copy, not a view: a sliced frame is non-contiguous, and it goes on to
-    # cv2.imencode, the mask fill and the JPEG writers
+    # OpenCV's later encoders expect contiguous image data.
     return frame[y1:y2, x1:x2].copy()
 
 
@@ -137,7 +99,18 @@ class LiveApp:
     def __init__(self, robot, camera=0, watchdog=0.0):
         self.robot = robot
         self.watchdog = watchdog    # seconds without a frame before exiting
-        self.cap = cv2.VideoCapture(camera)
+        # DirectShow usually opens Windows webcams faster and respects sizing.
+        self.cap = cv2.VideoCapture(
+            camera, cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY)
+        if sys.platform == "win32" and not self.cap.isOpened():
+            self.cap.release()
+            self.cap = cv2.VideoCapture(camera, cv2.CAP_ANY)
+        if not self.cap.isOpened():
+            raise SystemExit(
+                f"camera {camera} did not open. Try another index with "
+                "--camera 1, or let this terminal use the camera: on Windows, "
+                "Settings > Privacy & security > Camera; on macOS, System "
+                "Settings > Privacy & Security > Camera.")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.lock = threading.Lock()   # robot is shared: detect thread + keys
@@ -162,35 +135,33 @@ class LiveApp:
 
     @banner.setter
     def banner(self, msg):
-        # A property only so each assignment bumps a counter: the page hides a
-        # status line a few seconds after it arrives, and without one it cannot
-        # tell a stale message from the same message sent again.
+        # The sequence lets the page distinguish a repeated status message.
         self._banner = msg
         self._banner_seq += 1
 
     # -- threads ---------------------------------------------------------------
 
-    def _loop(self):
-        """Main thread: pull frames and compose the view, nothing else.
+    def _start_voice(self):
+        """Claim the shared voice path if it is idle."""
+        with self.lock:
+            if self.busy:
+                return False
+            self.busy = True
+            return True
 
-        Keep it that way. FORGET scans and flushes the shard and REBOOT
-        reopens it, and both want the lock the detect thread holds for a whole
-        detection pass - doing that here is a visible stall on the button.
-        """
+    def _finish_voice(self):
+        with self.lock:
+            self.busy = False
+
+    def _loop(self):
+        """Read and render camera frames on the main thread."""
         while True:
             ok, frame = self.cap.read()
             if not ok:
+                print("the camera stopped delivering frames; shutting down.")
                 break
             if config.CAMERA_ROTATE == 180:
-                # The mount fix, and this is the only place it can go: one
-                # entry point for the camera, so the detector, the crops that
-                # get embedded, the scene pictures and the streamed view all
-                # agree about which way is up. Rotate any deeper and the feed
-                # and the memories would disagree.
-                # 0.77 ms median on a 1280x720 frame, against a 103 ms
-                # cap.read() - not something the pump can feel.
-                # Deliberately NOT in app.replay(): the testdata images are
-                # already upright, and score parity is measured against them.
+                # Rotate once so detection, memories, and the feed agree.
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
             frame = crop_edges(frame)
             self.frame_at = time.monotonic()  # for _watchdog
@@ -210,28 +181,13 @@ class LiveApp:
                 self.mem_count = self.robot.memory.count()
 
     def _watchdog(self, stall):
-        """Insurance for a robot nobody can see: if frames stop arriving, die
-        so the service manager restarts us.
-
-        A camera that fails cleanly already ends _loop. This is for a USB
-        device that wedges INSIDE the driver call, which the frame pump cannot
-        notice because it is the thread that is stuck. The clock is armed here
-        rather than on the first frame, because a camera that wedges on its
-        very first read is exactly what this exists for.
-
-        Monotonic on purpose: the operator sets the appliance's date by hand,
-        and a stepped wall clock would either kill a healthy robot or blind
-        this entirely.
-        """
+        """Exit after a camera stall so the service manager can restart."""
         self.frame_at = time.monotonic()
-        # wait, not sleep, so a shutdown in progress cannot be shot from under
         while not self.stop.wait(2):
             if time.monotonic() - self.frame_at > stall:
-                print(f"no camera frame for {stall:.0f}s — exiting so the "
+                print(f"no camera frame for {stall:.0f}s; exiting so the "
                       "service restarts", flush=True)
-                # _exit, not a clean shutdown: the pump is blocked in a driver
-                # call and self.lock may never come free. Safe because every
-                # memory write is already flushed to disk.
+                # The camera driver may hold the main thread and app lock.
                 os._exit(1)
 
     def _key_loop(self):
@@ -243,31 +199,30 @@ class LiveApp:
                 continue
             try:
                 self._handle_key(key)
-            except Exception:  # a stray press must not kill the thread
+            except Exception:  # noqa: BLE001 - keep the input worker alive
                 print(f"key {key!r} failed:")
                 traceback.print_exc()
 
     def _handle_key(self, key):
         focused, teachable = self.robot.attention, self.robot.teachable
-        if key == "t" and not self.busy:
+        if key == "t":
             target = self._teach_target(teachable)
             if target is None:
                 self.banner = "nothing new to teach"
                 return
-            self.busy = True
-            # remember which track this taught, so only that one re-asks memory
+            if not self._start_voice():
+                return
+            # Requery only the track being taught.
             self.pending_track = teachable
             threading.Thread(target=self._voice_action, args=("t", target),
                              daemon=True).start()
-        elif key == "a" and not self.busy:
-            self.busy = True
+        elif key == "a":
+            if not self._start_voice():
+                return
             threading.Thread(target=self._voice_action, args=("a", None),
                              daemon=True).start()
         elif key == "f":
-            # Forget the recognized object the panel is showing. Keyboard only:
-            # aiming a delete with the camera is what the memory tab replaces,
-            # but a key is still the fastest beat to film and is not something
-            # a thumb lands on by accident.
+            # Destructive focus-based deletion is keyboard-only.
             if focused is None or not focused.label:
                 self.banner = "nothing recognized to forget"
             else:
@@ -278,10 +233,7 @@ class LiveApp:
             else:
                 with self.lock:
                     self.robot.ignore(teachable, self.latest)
-                    # and out of the list the frame pump draws from, so the box
-                    # goes on the next composed frame rather than at the next
-                    # detect pass. A new list, not an edit: the pump reads this
-                    # without the lock.
+                    # Replace the shared list so the box disappears immediately.
                     self.tracks = [t for t in self.tracks if t is not teachable]
                 self.banner = "ignored · undo it in MEMORY"
         elif key == "r":
@@ -311,9 +263,7 @@ class LiveApp:
             self._publish(buf)
 
     def _publish(self, buf):
-        """Hand a composed JPEG to the stream handler, stamped so it can send
-        each frame exactly once. One tuple, assigned in one bytecode, so the
-        number and the bytes can never disagree."""
+        """Publish a numbered JPEG so each client sends it once."""
         self._seq += 1
         self.shot = (self._seq, buf.tobytes())
 
@@ -335,8 +285,7 @@ class LiveApp:
     # -- what the page reads ---------------------------------------------------
 
     def state(self):
-        """What the panel draws, as JSON. Read once from the shared attributes
-        so a detect pass landing mid-build cannot split one view across two."""
+        """Return the current panel state as JSON-ready data."""
         r = self.robot
         focus, teachable = r.attention, r.teachable
         seen = focus is not None and focus.last_query
@@ -347,8 +296,7 @@ class LiveApp:
             "busy": self.busy,
             "status": self.banner,
             "status_seq": self._banner_seq,
-            # whether TEACH will do anything, so the button can say so before
-            # the finger goes down instead of refusing afterwards
+            # Let the button show whether teaching is currently available.
             "teachable": teachable is not None and teachable.crop is not None,
             "focus": {
                 "label": focus.label,
@@ -362,12 +310,7 @@ class LiveApp:
         }
 
     def memories(self, offset=0, limit=12):
-        """One page of "what do you know?", newest object first.
-
-        No app lock, deliberately: Memory serializes its own shard access, and
-        behind the app lock this page waited on a whole detection pass - paid
-        on every open, delete and rename, since all of them redraw the tab.
-        """
+        """Return one page of objects, newest first."""
         objects = self.robot.memory.objects()
         return {
             "total": len(objects),
@@ -378,8 +321,7 @@ class LiveApp:
                 "label": o["label"],
                 "seen": o["seen"],
                 "views": [self._view_json(v) for v in o["views"]],
-                # the robot's own photos of it, same shape as a view. The
-                # card's tap-cycle walks these after the taught views.
+                # Sightings use the same browser shape as taught views.
                 "sightings": [self._view_json(v) for v in o["sightings"]],
             } for o in objects[offset:offset + limit]],
         }
@@ -388,14 +330,10 @@ class LiveApp:
     def _view_json(payload):
         """One taught view or sighting, flattened for the page."""
         thumb = payload.get("thumb")
-        # the unmasked picture, falling back to the crop so points written
-        # before scenes existed still show something
+        # Older points may have only the masked crop.
         scene = payload.get("scene") or thumb
         return {
-            # A string on purpose. Point ids are around 1.8e18, past
-            # JavaScript's 2^53, where JSON numbers silently round - the page
-            # would then ask to delete an id that does not exist and the view
-            # would quietly survive its own deletion.
+            # Large point IDs must remain exact in JavaScript.
             "id": str(payload["id"]),
             "when": stamp(payload.get("ts") or 0),
             "transcript": payload.get("transcript"),
@@ -444,16 +382,7 @@ class LiveApp:
         return n
 
     def rename(self, label, to):
-        """Rename one object, from the tab. No IMAGE vector moves.
-
-        The new name is embedded HERE, before the live-state lock, for the
-        reason the teach path transcribes before taking it: a cold Nomic load
-        is ~4 s of held GIL, and paying it under the lock stalls the detect
-        thread long enough for DEAD_SECONDS to delete live tracks. Warm it is
-        ~0.15 s. Normalized first, so the vector embeds exactly the string that
-        gets stored. `warm_text` and not `embed_text` alone: a cold build from
-        an HTTP thread would race a pointerdown warm and build Nomic twice.
-        """
+        """Rename an object and update the vector used for text recall."""
         to = norm_label(to)
         models.warm_text()
         text_vec = models.embed_text(to)
@@ -468,12 +397,9 @@ class LiveApp:
             n, whole = self.robot.forget_view(pid, label)
             self.mem_count = self.robot.memory.count()
         if whole:
-            # it was the last view, so the object itself is gone - say so with
-            # the same card FORGET uses, or the tab looks like it over-deleted
             self.card = ("forgot", (label, n))
-            self.banner = f'that was the last view of "{label}" — forgot it'
+            self.banner = f'that was the last view of "{label}"; forgot it'
         elif n > 1:
-            # a sighting row stands for its burst, so one tap drops several
             self.banner = f'dropped {n} photos of "{label}"'
         elif n:
             self.banner = f'dropped one view of "{label}"'
@@ -488,12 +414,7 @@ class LiveApp:
         return ok
 
     def confirm(self, label):
-        """Tap on the orange guess: teach the attending crop as that name.
-
-        Encoders warm OUTSIDE the lock, exactly like the voice path: paying a
-        first-of-session model load under the lock stalls the detect thread
-        long enough to start killing tracks.
-        """
+        """Teach the current crop using its displayed near-match label."""
         self.banner = "thinking..."
         models.warm_encoders()
         with self.lock:
@@ -501,8 +422,7 @@ class LiveApp:
             if res:
                 self.mem_count = self.robot.memory.count()
         if res is None:
-            # the guess moved on between the paint and the tap: refuse honestly
-            # rather than teach whatever holds the panel now
+            # The focused guess changed after the page rendered.
             self.banner = "nothing to confirm"
             return {"ok": False}
         self.card = ("taught", res)
@@ -510,9 +430,7 @@ class LiveApp:
         return {"ok": True, "label": res["label"]}
 
     def set_where(self, place):
-        """Update the robot's location, from the tab. Under the lock like the
-        other mutations: a teach mid-flight reads this and should see one
-        value, not a torn decision."""
+        """Update the location stamped on future memories."""
         with self.lock:
             where = self.robot.set_where(place)
         self.banner = f'here: "{where}"' if where else "location cleared"
@@ -536,12 +454,7 @@ class LiveApp:
     def on_listen(self, action):
         """Phone started hold-to-talk: narrate LISTENING, stash the crop."""
         self.banner = "LISTENING · speak now"
-        # Start loading Whisper and Nomic NOW, under the hold, so the first
-        # voice action of a session does not pay ~7 s of model loads after the
-        # finger lifts. The cost is moved, not removed: a cold load pauses
-        # every thread including the feed, so it happens while "LISTENING" is
-        # on screen. Safe for tracking because a ~3 s hold sits inside
-        # DEAD_SECONDS, and that margin is not large.
+        # Load voice models while the button is held to shorten the later wait.
         threading.Thread(target=self._warm_quietly, daemon=True).start()
         if action == "t":
             f = self.robot.teachable
@@ -549,61 +462,52 @@ class LiveApp:
             self.pending_track = f if self.pending_teach else None
 
     def on_audio(self, action, body):
-        """Phone released hold-to-talk with a WAV. Returns an HTTP status.
-
-        ponytail: the check-and-set on `busy` is not atomic. One operator, and
-        shard writes are serialized by the lock regardless.
-        """
-        if self.busy:
+        """Accept a phone recording and return an HTTP status."""
+        if not self._start_voice():
             return 409
         if action == "t" and self.pending_teach is None:
             self.banner = "nothing in focus to teach"
+            self._finish_voice()
             return 409
-        self.busy = True
         target = self.pending_teach if action == "t" else None
         threading.Thread(target=self._phone_audio, args=(action, body, target),
                          daemon=True).start()
         return 202
 
     def _warm_quietly(self):
-        """warm_encoders for a background thread: a failed load must be one log
-        line, not a traceback storm - the action itself retries it."""
+        """Load voice models in the background; the action retries failures."""
         try:
             models.warm_encoders()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the action retries the load
             print(f"encoder warm failed (the action will retry): {e}")
 
     def _voice_action(self, action, target):
-        """Laptop path: record through the local mic, then process.
-
-        No early encoder warm here, unlike on_listen: a cold model load blocks
-        this thread's 100 ms reads and chops the audio. The phone records on
-        the phone, so it has nothing to starve.
-        """
+        """Record from the computer's microphone, then process the audio."""
         self.banner = "LISTENING · speak now"
         try:
             spoke = mic.record_wav(UTTERANCE_WAV)  # stops itself after silence
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - device APIs vary by platform
             print(f"mic failed: {e}")
-            self.banner = "mic failed: check MIC_DEVICE in robot/device/mic.py"
-            self.busy = False
+            self.banner = "mic failed: check MIC_DEVICE in .env"
+            self._finish_voice()
             return
         self._process(action, UTTERANCE_WAV, target, heard=spoke)
 
     def _phone_audio(self, action, body, target):
         """Phone path: the uploaded WAV replaces the local recording, and
         everything downstream is identical."""
-        with open(UTTERANCE_WAV, "wb") as f:
-            f.write(body)
+        try:
+            with open(UTTERANCE_WAV, "wb") as f:
+                f.write(body)
+        except OSError as e:
+            print(f"could not save phone audio: {e}")
+            self.banner = "could not save the recording"
+            self._finish_voice()
+            return
         self._process(action, UTTERANCE_WAV, target)
 
     def _process(self, action, wav, target, heard=None):
-        """Silence guard -> transcribe -> teach or ask. Shared by both mic
-        paths, off the main loop so the feed never freezes.
-
-        `heard` is record_wav's speech flag on the laptop path; the phone WAV
-        passes None and falls back to the RMS guard.
-        """
+        """Reject silence, transcribe, then teach or recall."""
         try:
             rms = mic.wav_rms(wav)
             print(f"recorded level (rms): {rms:.0f}"
@@ -614,19 +518,12 @@ class LiveApp:
                 self.banner = "didn't hear anything, try again"
                 return
             self.banner = "thinking..."
-            # Hand Whisper the utterance, not the hold: silence on either end
-            # both slows it down and makes it hallucinate.
+            # Trimming silence speeds Whisper and reduces hallucinations.
             kept = mic.trim_to_speech(wav)
             if kept:
                 print(f"trimmed the hold down to {kept:.1f} s of speech")
-            # Before the transcribe, so Whisper is certainly loaded, and before
-            # the live-state lock, so a first-of-session load cannot freeze the
-            # detect thread long enough to start killing tracks. The warm that
-            # started at pointerdown may still be running; this waits on its
-            # lock rather than building the same model twice.
+            # Model loading and transcription stay outside the live-state lock.
             models.warm_encoders()
-            # Whisper takes seconds; run it before claiming the lock so the
-            # detector keeps tracking while the robot listens.
             q = models.transcribe(wav)
             if action == "t":
                 crop, frame, box = target
@@ -634,26 +531,20 @@ class LiveApp:
                     taught = self.robot.teach(crop, q, frame=frame, box=box)
                     self.mem_count = self.robot.memory.count()
                     if self.pending_track is not None:
-                        # the beat: watch that one box turn green. One embed,
-                        # not one per track - a burst of them under the lock is
-                        # what the detect thread stalls on.
+                        # Refresh only the track that supplied the taught crop.
                         self.pending_track.requery_now()
                 print(f'taught "{taught["label"]}": {taught["transcript"]!r}')
                 self.card = ("taught", taught)
                 self.banner = f'taught: "{taught["label"]}"'
             else:
-                # No app lock: ask reads only memory, which serializes its own
-                # shard access, and touches no track state.
+                # Recall uses Memory's lock and does not touch track state.
                 res = self.robot.ask(q)
                 print(f"asked: {q!r}")
                 self.card = ("answer", (q, res))
                 self.banner = None
                 _speak(res)
         finally:
-            # No key drain here: the key thread handles presses as they arrive,
-            # and racing it for the queue could throw before `busy` is cleared,
-            # which wedges teach and ask until restart.
-            self.busy = False
+            self._finish_voice()
 
     # -- startup and shutdown --------------------------------------------------
 
@@ -661,11 +552,7 @@ class LiveApp:
         sys.setswitchinterval(0.002)  # keeps the feed smooth while YOLO runs
         StreamHandler.app = self
         server = ThreadingHTTPServer((host, PORT), StreamHandler)
-        # `host` says where to listen; the URL and the certificate need one
-        # real address to name. Normally that is whichever one the LAN gave us,
-        # but the headless robot passes --advertise: it serves its own hotspot
-        # at a fixed address, and naming that address is what lets a phone
-        # trust the certificate once and never be asked again.
+        # The listening host and the address advertised to phones can differ.
         loopback = host in ("127.0.0.1", "localhost")
         addr = advertise or (host if loopback else lan_ip())
         scheme = "http"
@@ -677,7 +564,7 @@ class LiveApp:
                 ctx.load_cert_chain(cert, key)
                 server.socket = ctx.wrap_socket(server.socket, server_side=True)
                 scheme = "https"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - HTTP remains a useful fallback
                 print(f"HTTPS setup failed ({e}); serving HTTP, so the phone "
                       "mic will not work, but the stream and REBOOT/quit do.")
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -706,11 +593,7 @@ class LiveApp:
         except KeyboardInterrupt:
             pass  # Ctrl-C is the quit path; fall through to a clean shutdown
         finally:
-            # From here the interrupt has been heard, and a SECOND one must not
-            # land in the middle of this: it would skip the shard close and
-            # abort in a native destructor. Two arrive as a matter of course -
-            # a service manager signals every process in the cgroup, and a
-            # human holding Ctrl-C does the same.
+            # Ignore repeated interrupts while native resources close.
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             self.stop.set()
             server.shutdown()
