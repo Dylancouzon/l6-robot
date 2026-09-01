@@ -1,29 +1,17 @@
-"""Microphone capture on the machine running the app, for the laptop path.
-
-The Jetson has no audio hardware: on the appliance the phone browser records
-and uploads a WAV instead, and only the helpers below that read a file are
-used. ffmpeg/avfoundation failed to open two different USB audio devices, so
-capture goes through sounddevice.
-"""
+"""Record computer audio and prepare WAV files for Whisper."""
 import wave
 
-MIC_DEVICE = None  # None = system default input. To pick another device:
-                   # uv run python -c "import sounddevice; print(sounddevice.query_devices())"
-                   # and set this to the device index or name.
+from robot.config import MIC_DEVICE
 
 SPEECH_RMS = 200   # a 100 ms block above this counts as speech
 TRAIL_QUIET = 0.9  # seconds of quiet after speech before recording stops
 
 
 def record_wav(path, max_seconds=8.0):
-    """Record the mic to a 16 kHz mono WAV, which is what Whisper expects.
+    """Record speech at the device rate and save a 16 kHz mono WAV.
 
-    Stops on its own once speech is followed by ~a second of quiet;
-    `max_seconds` is the cap, not the duration. Records at the device's
-    native rate (USB mics often refuse 16 kHz) and resamples.
-
-    Returns True if speech crossed SPEECH_RMS, so the caller does not have to
-    re-derive silence from the clip.
+    Recording stops after speech followed by quiet, or at `max_seconds`.
+    Returns whether the input crossed the speech threshold.
     """
     import numpy as np
     import sounddevice as sd
@@ -46,8 +34,6 @@ def record_wav(path, max_seconds=8.0):
                 if quiet >= TRAIL_QUIET:
                     break
     if lost:
-        # a garbled transcript after this line is dropped audio, not Whisper:
-        # something starved this loop while the stream was open
         print("mic buffer overflowed; some audio was dropped")
     samples = np.concatenate(chunks)
     if rate != 16000:
@@ -76,28 +62,12 @@ def wav_rms(path):
 
 
 def is_silent(path, rms_floor=120):
-    """True if the WAV is near-silence.
-
-    Whisper hallucinates on silence ("Thanks for watching!"), so a failed
-    capture has to fail visibly instead of teaching a nonsense label. All-zero
-    audio also means the mic permission was never granted. Used for the phone
-    path, whose uploaded WAV carries no speech flag; record_wav returns its own.
-    """
+    """Return whether a WAV is too quiet to transcribe reliably."""
     return wav_rms(path) < rms_floor
 
 
 def trim_to_speech(path, pad=0.2):
-    """Cut the quiet off both ends in place. Returns the kept duration, or None.
-
-    Whisper charges for every second it is given and starts repeating itself
-    when handed silence, so the recording that reaches it should be the
-    utterance rather than the whole button hold.
-
-    Fails open, and uses the same SPEECH_RMS bar record_wav stops on, so both
-    mic paths agree on what counts as speech. A hold too quiet to reach that
-    bar is passed through whole: guessing where the speech was in a clip that
-    quiet is worse than the rms line in the log telling the operator to speak up.
-    """
+    """Trim quiet ends in place and return the kept duration when changed."""
     import numpy as np
     with wave.open(str(path)) as w:
         if w.getnchannels() != 1 or w.getsampwidth() != 2:

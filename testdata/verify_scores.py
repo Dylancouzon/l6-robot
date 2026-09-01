@@ -38,9 +38,9 @@ import numpy as np
 from fastembed import ImageEmbedding
 from PIL import Image
 
-from robot.config import RECOGNIZE_THRESHOLD
 from robot.brain.detect import CONF, IMGSZ, Detector, padded_crop
 from robot.brain.models import CACHE_DIR, CLIP_VISION_MODEL, ENCODER_THREADS
+from robot.config import RECOGNIZE_THRESHOLD
 
 TESTDATA = Path(__file__).parent
 SWEEP = [0.75, 0.80, 0.85, 0.88, 0.90, 0.92, 0.95]
@@ -137,7 +137,7 @@ def main():
     margin = same.min() - cross.max()
     print(f"margin (worst same - best different): {margin:+.3f}")
     if margin <= 0:
-        print("  ! the distributions overlap. No threshold separates them — "
+        print("  ! the distributions overlap. No threshold separates them; "
               "fix the crops (get closer, better light) before tuning.")
 
     sweep = sorted(set(SWEEP + [RECOGNIZE_THRESHOLD]))
@@ -150,7 +150,7 @@ def main():
     good = [th for th in sweep if (cross >= th).sum() == 0
             and (same >= th).sum() == len(same)]
     print(f"\nclean on these images: "
-          f"{good if good else 'nothing — fix the crops before tuning'}")
+          f"{good if good else 'nothing; fix the crops before tuning'}")
 
     # The instruction has to be "start at the top", not "pick the middle".
     # Separate photos of distinct objects are the EASY case: they share no

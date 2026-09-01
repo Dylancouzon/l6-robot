@@ -67,11 +67,11 @@ def replay(robot, source):
 
 
 def _ip_arg(text):
-    """--advertise, checked here rather than by openssl.
+    """--advertise, checked here rather than by the certificate builder.
 
     The value is written as an `IP:` subjectAltName, and a hostname there makes
-    openssl reject the whole certificate - which lands in the HTTPS fallback
-    and quietly serves plain http, taking the phone mic away over a typo.
+    certificate generation fail - which lands in the HTTPS fallback and
+    quietly serves plain http, taking the phone mic away over a typo.
     """
     try:
         return str(ipaddress.ip_address(text))

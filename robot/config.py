@@ -1,16 +1,8 @@
-"""Per-device calibration, read from `.env`.
+"""Load camera and microphone settings from `.env`.
 
-Every number in this file depends on YOUR camera and YOUR scene, not on the
-code. A 1080p webcam a foot from the desk and a 720p USB camera across the
-room produce crops of different size and sharpness, and CLIP scores move with
-them — so the recognition threshold that separates "this is my mug" from
-"this is furniture" is not portable between machines. Calibrate it with
-`testdata/verify_scores.py`; the README walks through reading its output.
-
-Precedence, loosest to tightest: the defaults below, then `.env`, then a real
-exported environment variable, then a command-line flag. That order is what
-lets you keep a calibrated `.env` for the room and still A/B a value for one
-run without editing a file.
+Camera-dependent values should be calibrated with `testdata/verify_scores.py`.
+Exported environment variables override `.env`; command-line flags override
+both when available.
 """
 import os
 from pathlib import Path
@@ -36,9 +28,7 @@ def _number(name, default, cast=float):
 
 
 def _fractions(name, default):
-    """A knob that takes one fraction for all four sides, or four of them as
-    `left,top,right,bottom`. Fractions, not pixels, so it survives a change of
-    capture size."""
+    """Read one edge fraction or `left,top,right,bottom` fractions."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
@@ -58,12 +48,21 @@ def _fractions(name, default):
     return vals
 
 
+def _device(name):
+    """An optional sounddevice name or numeric index."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 # -- recognition -------------------------------------------------------------
 
-# Nearest taught view must score at least this to count as "I know that".
-# CLIP cosine has a high floor: two unrelated crops from the same camera
-# routinely score 0.75-0.85, so this is a knee to find, not a fraction of
-# confidence to guess at. Calibrate it, don't reason about it.
+# The nearest taught view must meet this CLIP cosine-similarity threshold.
+# It is not a confidence percentage; calibrate it for each camera.
 RECOGNIZE_THRESHOLD = _number("RECOGNIZE_THRESHOLD", 0.90)
 
 # -- detection ---------------------------------------------------------------
@@ -71,28 +70,16 @@ RECOGNIZE_THRESHOLD = _number("RECOGNIZE_THRESHOLD", 0.90)
 # Detector confidence floor. Raise it to track less clutter.
 DETECT_CONF = _number("DETECT_CONF", 0.30)
 
-# Biggest proposal kept, as a fraction of frame area. The default drops
-# torso-sized and wall-sized phantom boxes; raise it if your camera is far
-# enough away that real objects are small in frame.
+# Largest detection kept, as a fraction of the frame area.
 DETECT_MAX_AREA = _number("DETECT_MAX_AREA", 0.20)
 
-# Smallest proposal kept, the other end of the same band. Drops speck noise —
-# and, raised, the small far-away clutter that is technically an object but
-# not what anyone is holding up to the camera. Area, not width: it scales as
-# the SQUARE of how big the thing looks, so 0.001 is only about 12% wider than
-# the 0.0008 this shipped with, not 25%.
+# Smallest detection kept, as a fraction of the frame area.
 DETECT_MIN_AREA = _number("DETECT_MIN_AREA", 0.001)
 
 # -- camera ------------------------------------------------------------------
 
-# How the camera is mounted, in degrees. The appliance's camera is fixed
-# upside down in the chassis, so the unit's own .env says 180; a camera
-# sitting the right way up wants 0, which is why that is the default here.
-#
-# Only 0 and 180 are accepted. A quarter turn would swap the frame's width and
-# height, and the capture size, the page's video box and the scene pictures
-# are all written for a landscape frame — that is a different job from a mount
-# fix, so an unsupported value fails at startup instead of half-working.
+# The appliance camera is mounted upside down. Other cameras normally use 0.
+# Quarter turns are unsupported because the interface expects landscape video.
 CAMERA_ROTATE = _number("CAMERA_ROTATE", 0, int)
 if CAMERA_ROTATE not in (0, 180):
     raise SystemExit(
@@ -101,24 +88,15 @@ if CAMERA_ROTATE not in (0, 180):
         "height, which the rest of the app assumes is landscape.")
 
 
-# What to cut off each edge of the camera frame, as fractions of the width and
-# height: one number for all four sides, or `left,top,right,bottom`.
-#
-# A lens whose image circle is smaller than the sensor puts its own black rim
-# in the picture, and the detector proposes boxes on that rim like any other
-# shape. Measure it rather than guessing: hold a white card against the lens,
-# capture one frame, and the rim is everything that stays black.
-#
-# Four numbers and not one because the rim is rarely centred. On the appliance
-# the circle sits 104 px low and 23 px left of the sensor centre, so one
-# symmetric fraction big enough to clear the worst edge keeps 50% of the
-# picture where four edge fractions keep 62%.
-#
-# Read in the picture's own coordinates: the mount rotation above happens
-# first, so `top` is the top of the feed you are looking at. Changing the
-# mount means measuring these again.
+# Fractions removed from the camera edges to hide a lens rim. Accepts one value
+# for every edge or `left,top,right,bottom`. Rotation happens before cropping,
+# so the directions match the displayed image.
 FRAME_CROP = _fractions("FRAME_CROP", (0.0, 0.0, 0.0, 0.0))
 if FRAME_CROP[0] + FRAME_CROP[2] > 0.8 or FRAME_CROP[1] + FRAME_CROP[3] > 0.8:
     raise SystemExit(
         f"FRAME_CROP in {ENV_FILE.name} cuts away almost the whole frame: "
         f"{FRAME_CROP}")
+
+# -- microphone --------------------------------------------------------------
+
+MIC_DEVICE = _device("MIC_DEVICE")

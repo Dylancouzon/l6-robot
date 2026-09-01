@@ -1,11 +1,15 @@
 [project]
-name = "l6-robot"
+name = "qdrant-edge-memory-robot"
 version = "0.1.0"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # The encoder stack is pinned to the same versions as the course, because
-    # the 0.80 recognition threshold is calibrated against these exact
-    # encoders. Changing one moves every score.
+    # Generates the local HTTPS certificate without requiring an OpenSSL
+    # executable, which is not included with Windows.
+    "cryptography>=46.0.0",
+    # The encoder stack is pinned exactly: the 0.90 recognition threshold is
+    # calibrated against these exact encoders. Changing one moves every score.
     "fastembed==0.8.0",
     "numpy==2.5.1",
     "onnx-asr==0.12.0",
@@ -20,8 +24,7 @@ dependencies = [
     "ultralytics>=8.4.96",
     # Ultralytics would pull Torch in transitively, letting a resolver pick the
     # build. Pin it instead: these are the versions the detector is tested on,
-    # and the stock CUDA wheel is the one that runs on a Jetson Orin (see
-    # README, "Running on a Jetson Orin Nano").
+    # including the stock CUDA wheel used on the Jetson Orin.
     "torch==2.13.0",
     "torchvision==0.28.0",
 ]

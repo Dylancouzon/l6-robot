@@ -1,0 +1,24 @@
+[Unit]
+Description=Qdrant Edge Memory Robot
+Documentation=https://github.com/Dylancouzon/l6-robot
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# headless-setup.sh replaces these tokens for the account and clone that run it.
+User=@USER@
+WorkingDirectory="@REPO@"
+Environment="HOME=@HOME@"
+Environment="PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment=PYTHONUNBUFFERED=1
+ExecStart="@UV@" run --no-sync python -m robot.app \
+          --host 0.0.0.0 --advertise 10.42.0.1 --watchdog 30
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

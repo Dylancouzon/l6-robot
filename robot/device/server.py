@@ -7,11 +7,12 @@ everything that is not video.
 HTTP/1.0 is deliberate - each poll is its own connection. Moving to 1.1 would
 need an accurate Content-Length on every response or clients hang.
 """
+import ipaddress
 import json
 import socket
 import ssl
-import subprocess
 import time
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -31,42 +32,58 @@ def lan_ip():
         s.close()
 
 
-def ensure_cert(ip):
-    """Self-signed certificate, so the phone browser treats the page as a
-    secure context - getUserMedia refuses plain http. Returns (cert, key).
+def ensure_cert(ip, root=None):
+    """Create or reuse the self-signed certificate required by phone audio.
 
-    Three details decide how loudly the browser complains:
-
-    * A subjectAltName for the address you actually open. Browsers stopped
-      reading the CN field in 2017, so a CN-only certificate names nothing,
-      which is a harsher warning that trusting it cannot fix.
-    * Validity under 825 days, or Safari refuses it outright.
-    * CA:TRUE, so a phone can install it as a root once and stop warning.
-
-    Built with a config file rather than -addext, which the LibreSSL that
-    ships as /usr/bin/openssl on macOS does not have. Regenerated only when
-    the address changes, so a trusted phone stays trusted across restarts.
+    The certificate covers the advertised IP, localhost, and the local host
+    name. It is a CA certificate so a phone can trust it after installation.
     """
-    root = Path(__file__).resolve().parents[2] / "cert"
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    root = Path(root) if root is not None else (
+        Path(__file__).resolve().parents[2] / "cert")
     cert, key, named = root / "cert.pem", root / "key.pem", root / "names.txt"
+    hostname = socket.gethostname().split(".")[0] + ".local"
     # localhost stays valid so the laptop view works off the same certificate
     want = ",".join([f"IP:{ip}", "IP:127.0.0.1", "DNS:localhost",
-                     f"DNS:{socket.gethostname().split('.')[0]}.local"])
+                     f"DNS:{hostname}"])
     if (cert.exists() and key.exists() and named.exists()
-            and named.read_text() == want):
+            and named.read_text(encoding="utf-8") == want):
         return str(cert), str(key)
     root.mkdir(exist_ok=True)
-    conf = root / "openssl.cnf"
-    conf.write_text(
-        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-        "[dn]\nCN=l6-robot\n"
-        f"[ext]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName={want}\n")
-    subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-         "-keyout", str(key), "-out", str(cert), "-days", "397",
-         "-config", str(conf)],
-        check=True, capture_output=True)
-    named.write_text(want)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "qdrant-edge-memory-robot"),
+    ])
+    now = datetime.now(UTC)
+    san = x509.SubjectAlternativeName([
+        x509.IPAddress(ipaddress.ip_address(ip)),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+        x509.DNSName("localhost"),
+        x509.DNSName(hostname),
+    ])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=397))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None),
+                       critical=True)
+        .add_extension(san, critical=False)
+        .sign(private_key, hashes.SHA256())
+    )
+    key.write_bytes(private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    named.write_text(want, encoding="utf-8")
     print(f"generated a certificate for {ip} (valid 397 days)")
     return str(cert), str(key)
 
@@ -84,17 +101,14 @@ class StreamHandler(BaseHTTPRequestHandler):
         return vals[0] if vals else default
 
     def _int(self, key, default):
-        """A non-negative integer query value; anything else is the default.
-        These arrive from a URL, and a typo should not be a traceback."""
+        """Parse a non-negative integer query value."""
         try:
             return max(0, int(self._query(key, default)))
         except (TypeError, ValueError):
             return default
 
     def _send_json(self, obj, status=200):
-        """Content-Length on every JSON reply, and never cached: a frozen panel
-        beside a moving video is horrible to diagnose in a room, and a stale
-        memory list would still offer an object that was just deleted."""
+        """Send a complete, non-cached JSON response."""
         body = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -119,13 +133,11 @@ class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if self.path.startswith("/cert.crt") and self.cert:
-                # Hand the certificate to the phone so it can be trusted once.
-                # This is the same certificate already on the wire, so serving
-                # it gives away nothing the TLS handshake does not.
+                # Let the phone install the same public certificate TLS serves.
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-x509-ca-cert")
                 self.send_header("Content-Disposition",
-                                 'attachment; filename="l6-robot.crt"')
+                                 'attachment; filename="qdrant-memory-robot.crt"')
                 self.end_headers()
                 self.wfile.write(Path(self.cert).read_bytes())
             elif self.path == "/":
@@ -163,7 +175,7 @@ class StreamHandler(BaseHTTPRequestHandler):
             elif self.path.startswith("/stream"):
                 self._stream()
             elif self.path.startswith("/key?k="):
-                self.app.keys.put(self.path[-1])
+                self.app.keys.put(self._query("k", ""))
                 self.send_response(204)
                 self.end_headers()
             elif self.path.startswith("/listen"):
@@ -235,7 +247,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                      "n": self.app.rename(label, to)}
                     if label and to else {"n": 0}, 200 if label and to else 400)
             elif self.path.startswith("/confirm"):
-                # tap on the orange "dylan?": teach that crop as that name
+                # tap on the orange "my mug?": teach that crop as that name
                 label = self._query("label")
                 self._send_json(self.app.confirm(label)
                                 if label else {"ok": False},
