@@ -28,11 +28,11 @@ The ready-to-print files are in [`hardware/`](../hardware/):
 
 | File | Color | Parts |
 |---|---|---|
-| `l6b1_white_plate.3mf` | White | Shell |
-| `l6b1_charcoal_plate.3mf` | Charcoal | Keel, camera clamp, eye visor, antenna |
-| `l6b1_red_plate.3mf` | Red | Antenna tip |
+| `white_plate.3mf` | White | Shell |
+| `charcoal_plate.3mf` | Charcoal | Keel, camera clamp, eye visor, antenna |
+| `red_plate.3mf` | Red | Antenna tip |
 
-The separate `.stl` files contain the same six parts. The existing `l6b1` filenames are kept so saved slicer projects and links continue to work.
+The separate `.stl` files contain the same six parts.
 
 Use these settings:
 
@@ -61,4 +61,4 @@ Glue the visor last. Removing it later may break it.
 
 ## Change the Model
 
-Open [`l6-bot-v54.html`](../hardware/l6-bot-v54.html) in Chrome. Wait about 45 seconds for the model and audit to finish, then export new plates. Do not print a model that reports an audit failure.
+Import [`l6-bot-v54.html`](../hardware/l6-bot-v54.html) into Claude Design to edit the model, or open it directly in Chrome. Wait about 45 seconds for the model and audit to finish, then export new plates. Do not print a model that reports an audit failure.

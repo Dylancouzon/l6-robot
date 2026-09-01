@@ -1082,19 +1082,19 @@ const ghostGreen = new THREE.MeshStandardMaterial({ color: 0x3a7d44, transparent
 const PARTS = [
   // v5.4: no l6b1_floor. The puck and the keel are one part — eight printed parts became
   // seven, and the charcoal plate lost its Ø99 disc, so the keel's own footprint IS that disc.
-  { file: 'l6b1_keel', solid: keel, rot: 0, mat: charcoal, plate: 0, at: [40, -50] },
+  { file: 'keel', solid: keel, rot: 0, mat: charcoal, plate: 0, at: [40, -50] },
   // pads up, plate face down: with the pads on the bed the 2.8 mm plate would print as a
   // 212 mm² island 0.6 mm in the air. 180° about y puts the flat face on the bed.
-  { file: 'l6b1_camera_clamp', solid: clamp, rot: [-eyeRot, 180, 0], mat: charcoal, plate: 0, at: [-60, 55] },
-  { file: 'l6b1_eye_visor', solid: bezel, rot: 270 + D(TILT), mat: charcoal, plate: 0, at: [-60, -10] },
-  { file: 'l6b1_antenna', solid: antStem, rot: 0, mat: charcoal, plate: 0, at: [-60, -60] },
-  { file: 'l6b1_antenna_tip', solid: antTip, rot: 0, mat: qdrantRed, plate: 2, at: [0, 0] },
-  { file: 'l6b1_shell', solid: shell, rot: 0, mat: white, plate: 1, at: [0, 0] },
+  { file: 'camera_clamp', solid: clamp, rot: [-eyeRot, 180, 0], mat: charcoal, plate: 0, at: [-60, 55] },
+  { file: 'eye_visor', solid: bezel, rot: 270 + D(TILT), mat: charcoal, plate: 0, at: [-60, -10] },
+  { file: 'antenna', solid: antStem, rot: 0, mat: charcoal, plate: 0, at: [-60, -60] },
+  { file: 'antenna_tip', solid: antTip, rot: 0, mat: qdrantRed, plate: 2, at: [0, 0] },
+  { file: 'shell', solid: shell, rot: 0, mat: white, plate: 1, at: [0, 0] },
 ];
 const PLATES = [
-  { name: 'charcoal', file: 'l6b1_charcoal_plate', x: -140 },
-  { name: 'white', file: 'l6b1_white_plate', x: 140 },
-  { name: 'red', file: 'l6b1_red_plate', x: 420 },
+  { name: 'charcoal', file: 'charcoal_plate', x: -140 },
+  { name: 'white', file: 'white_plate', x: 140 },
+  { name: 'red', file: 'red_plate', x: 420 },
 ];
 const BED = 256;
 // ============ THE EXPORT BOUNDARY (§7.8) ============
