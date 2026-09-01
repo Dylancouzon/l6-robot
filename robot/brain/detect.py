@@ -37,6 +37,30 @@ PAD = 0.12          # crop margin; the mask removes the background anyway
 FILL = (124, 124, 124)
 
 
+def quantize_for(device):
+    """Half precision, CUDA only: the one detector knob that was worth turning.
+
+    Measured on the Orin over 70 real frames of one fixed capture: 167.7 ->
+    104.4 ms per tracked frame, CUDA peak 346 -> 181 MB, and the DETECTIONS DO
+    NOT MOVE - same proposal count and same stable tracks on every frame, boxes
+    matching the fp32 run at median IoU 0.995.
+
+    The SCORES do move, in the third decimal, because a box shifted by half a
+    pixel is a slightly different crop: parity went 0.887/0.920/0.472/0.611 to
+    0.882/0.918/0.474/0.612, margin +0.275 to +0.270, and the testdata replay's
+    cross-object scores fell by up to 0.024. Both are far below the bar and the
+    clean threshold range is unchanged, so 0.90 stands - but that is the new
+    baseline to compare against, not the old one.
+
+    Not on CPU or MPS: unmeasured there, and torch's CPU half is slower rather
+    than faster. Anything else that builds this checkpoint must ask here too -
+    testdata/verify_scores.py compares crops against the live threshold, and a
+    calibration script running at a different precision to the robot is worse
+    than no calibration script.
+    """
+    return 16 if device == "cuda" else None
+
+
 def padded_crop(frame, box, mask=None):
     """The crop that gets embedded: 12% margin, background flattened to gray.
 
@@ -133,6 +157,7 @@ class Detector:
             self.device = "mps"
         else:
             self.device = "cpu"
+        self.quantize = quantize_for(self.device)
         self.tracks = {}
         # Live track blocks. Persisted ignore vectors survive track-id changes.
         # Replacing this dict gives lock-free readers a consistent snapshot.
@@ -143,7 +168,7 @@ class Detector:
         dummy = np.zeros((360, 640, 3), dtype=np.uint8)
         with autorelease_pool():
             self.model.predict(dummy, device=self.device, imgsz=IMGSZ,
-                               verbose=False)
+                               quantize=self.quantize, verbose=False)
 
     def ignore(self, tid, pid=None):
         """Stop tracking one object. Sticky per track id, so it stays dismissed
@@ -173,6 +198,7 @@ class Detector:
             results = self.model.track(
                 frame,
                 device=self.device,
+                quantize=self.quantize,  # fp16 on CUDA, see quantize_for
                 conf=self.conf,
                 imgsz=IMGSZ,
                 max_det=MAX_DET,
