@@ -61,4 +61,4 @@ Glue the visor last. Removing it later may break it.
 
 ## Change the Model
 
-Import [`l6-bot-v54.html`](../hardware/l6-bot-v54.html) into Claude Design to edit the model, or open it directly in Chrome. Wait about 45 seconds for the model and audit to finish, then export new plates. Do not print a model that reports an audit failure.
+Import [`claude-design.html`](../hardware/claude-design.html) into Claude Design to edit the model, or open it directly in Chrome. Wait about 45 seconds for the model and audit to finish, then export new plates. Do not print a model that reports an audit failure.
