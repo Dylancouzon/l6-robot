@@ -30,7 +30,6 @@ from robot.device.runtime import UTTERANCE_WAV, stamp, when
 from robot.device.server import StreamHandler, ensure_cert, lan_ip
 
 PORT = 8765
-# `busy` ensures that only one voice action uses the shared audio file.
 STREAM_QUALITY = 85
 CROP_PX = 180   # the "sees now" thumbnail served at /crop.jpg
 
@@ -123,7 +122,9 @@ class LiveApp:
         self.shot = None      # (seq, jpeg): latest composed view, for /stream
         self._seq = 0
         self.keys = queue.Queue()
-        self.busy = False     # a voice action is running; ignore T/A meanwhile
+        # A voice action is running: it owns the shared audio file, and
+        # T/A are ignored until it finishes.
+        self.busy = False
         self.pending_teach = None  # (crop, frame, box) stashed when teach starts
         self.pending_track = None  # ...and the track they came from
         self.stop = threading.Event()

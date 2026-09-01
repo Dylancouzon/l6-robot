@@ -99,3 +99,9 @@ tests/            unit tests for platform-specific helpers
 Start reading at `robot/brain/core.py`. The `Robot.process_frame` method connects detection, embedding, recognition, and sighting storage. The [architecture guide](docs/architecture.md) provides a guided reading order.
 
 Runtime memories are stored in `edge-data/`, which Git ignores. Use `--reset` to start with an empty memory.
+
+## License
+
+The code and documentation are licensed under [Apache 2.0](LICENSE).
+
+The calibration photographs in `testdata/` come from Wikimedia Commons under CC BY-SA 4.0. [`testdata/CREDITS.json`](testdata/CREDITS.json) names each photographer and links the original file.

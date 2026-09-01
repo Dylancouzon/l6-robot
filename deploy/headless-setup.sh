@@ -77,10 +77,6 @@ sed \
 install -m 644 "$rendered_unit" "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME.service"
-if systemctl is-enabled --quiet l6-robot.service 2>/dev/null; then
-  systemctl disable l6-robot.service
-  echo "disabled legacy l6-robot.service"
-fi
 # Deliberately not restarted here: a re-run must not take a live robot down
 # mid-demo. A changed unit waits until someone asks for it.
 echo "enabled (if the unit changed: systemctl restart $SERVICE_NAME)"

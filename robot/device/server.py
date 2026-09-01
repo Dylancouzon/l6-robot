@@ -175,7 +175,7 @@ class StreamHandler(BaseHTTPRequestHandler):
             elif self.path.startswith("/stream"):
                 self._stream()
             elif self.path.startswith("/key?k="):
-                self.app.keys.put(self.path[-1])
+                self.app.keys.put(self._query("k", ""))
                 self.send_response(204)
                 self.end_headers()
             elif self.path.startswith("/listen"):
@@ -247,7 +247,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                      "n": self.app.rename(label, to)}
                     if label and to else {"n": 0}, 200 if label and to else 400)
             elif self.path.startswith("/confirm"):
-                # tap on the orange "dylan?": teach that crop as that name
+                # tap on the orange "my mug?": teach that crop as that name
                 label = self._query("label")
                 self._send_json(self.app.confirm(label)
                                 if label else {"ok": False},

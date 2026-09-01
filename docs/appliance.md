@@ -7,6 +7,8 @@ sudo ./deploy/headless-setup.sh
 sudo reboot
 ```
 
+Run this from the Jetson's own console, over Ethernet, or over the USB-C connection. The last step creates the hotspot, which takes the Wi-Fi radio away from any network the Jetson is currently joined to. An SSH session running over Wi-Fi ends there, partway through the setup.
+
 After the Jetson restarts:
 
 1. Join the network **`qdrant-memory`**, password **`qdrantedge`**.

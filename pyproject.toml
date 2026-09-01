@@ -1,6 +1,8 @@
 [project]
 name = "qdrant-edge-memory-robot"
 version = "0.1.0"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     # Generates the local HTTPS certificate without requiring an OpenSSL
