@@ -14,9 +14,9 @@ Build the robot in stages. Test the camera and software before printing or gluin
 
 ## 1. Gather the Hardware
 
-Use the [Hardware Shopping List](hardware-parts.md) to buy or provide every required component. It covers the Jetson, storage, camera, phone or tablet, filament, and assembly supplies.
+Use the [Hardware](hardware-parts.md) guide to gather every required component. It covers the Jetson, storage, camera, phone or tablet, filament, and assembly supplies.
 
-Buy and test the electronics before printing. The enclosure was designed around the Arducam IMX291 (B0200), and substitute cameras must meet the listed dimensions.
+Test the electronics before printing. The enclosure was designed around the Arducam IMX291 (B0200), and substitute cameras must meet the listed dimensions.
 
 ## 2. Test the Software First
 

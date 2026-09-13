@@ -4,11 +4,11 @@
 
 The enclosure holds a Jetson Orin Nano and a USB camera. Your phone provides the screen, microphone, and controls.
 
-Before you print, buy or provide every item in the [Hardware Shopping List](hardware-parts.md). The printable files contain the enclosure only, not the electronics.
+Before you print, gather every item in the [Hardware](hardware-parts.md) guide. The printable files contain the enclosure only, not the electronics.
 
 ## Check the Camera Fit
 
-The enclosure was designed around the Arducam IMX291 (B0200). Before printing for a different camera, confirm that it meets the dimensions in the [Hardware Shopping List](hardware-parts.md).
+The enclosure was designed around the Arducam IMX291 (B0200). Before printing for a different camera, confirm that it meets the dimensions in the [Hardware](hardware-parts.md) guide.
 
 Measure the physical camera when possible. The glued visor makes a later camera change difficult.
 

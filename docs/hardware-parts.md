@@ -1,6 +1,6 @@
-# Hardware Shopping List
+# Hardware
 
-The printable files contain the enclosure only. To build the complete robot, buy or provide every item in the following table before you print the enclosure.
+The printable files contain the enclosure only. To build the complete robot, gather every item in the following table before you print the enclosure.
 
 | Item | What You Need |
 |---|---|
@@ -13,7 +13,7 @@ The printable files contain the enclosure only. To build the complete robot, buy
 
 You also need access to a 3D printer with a build area of at least 177 × 176 mm. The repository provides the ready-to-print files and software.
 
-## Check the Camera Before You Buy
+## Check Camera Compatibility
 
 The enclosure was designed around the Arducam IMX291 (B0200). A different camera must meet all three measurements:
 
@@ -21,6 +21,6 @@ The enclosure was designed around the Arducam IMX291 (B0200). A different camera
 - Lens length: no more than 27 mm from the front of the board when focused fully inward.
 - Lens width: no part around the barrel wider than 26.5 mm.
 
-Check the seller's dimensions or measure the camera before printing. The glued visor makes a later camera change difficult.
+Check the manufacturer's dimensions or measure the camera before printing. The glued visor makes a later camera change difficult.
 
 After you have the parts, follow [Build Your Own Robot](build.md) for the complete setup sequence or go directly to [Print and Assemble the Enclosure](hardware.md).
