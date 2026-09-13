@@ -14,17 +14,9 @@ Build the robot in stages. Test the camera and software before printing or gluin
 
 ## 1. Gather the Hardware
 
-The reference build uses:
+Use the [Hardware Shopping List](hardware-parts.md) to buy or provide every required component. It covers the Jetson, storage, camera, phone or tablet, filament, and assembly supplies.
 
-| Part | Requirement |
-|---|---|
-| Computer | Jetson Orin Nano Super 8 GB developer kit and its power supply |
-| Storage | 256 GB or larger M.2 2280 NVMe SSD |
-| Camera | 37 × 37 mm USB UVC camera board with a lens near 100° |
-| Interface | A phone or tablet with Wi-Fi and a microphone |
-| Enclosure | About 300 g of PLA, one zip tie, and a drop of glue |
-
-The enclosure was designed around the Arducam IMX291 (B0200). Check the exact camera measurements in [Print and Assemble the Enclosure](hardware.md) before buying or printing parts.
+Buy and test the electronics before printing. The enclosure was designed around the Arducam IMX291 (B0200), and substitute cameras must meet the listed dimensions.
 
 ## 2. Test the Software First
 

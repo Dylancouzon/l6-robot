@@ -13,6 +13,7 @@ You do not need to print the enclosure or own a Jetson to explore the code.
 | Goal | Guide |
 |---|---|
 | Run the robot with a computer and webcam | [Get Started](docs/getting-started.md) |
+| Buy the parts for the complete robot | [Hardware Shopping List](docs/hardware-parts.md) |
 | Build the complete Jetson robot | [Build Your Own Robot](docs/build.md) |
 | Connect the course concepts to the implementation | [Understand the Architecture](docs/architecture.md) |
 | Find a specific setup or reference page | [Browse the Documentation](docs/README.md) |

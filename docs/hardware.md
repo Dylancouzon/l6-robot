@@ -4,23 +4,13 @@
 
 The enclosure holds a Jetson Orin Nano and a USB camera. Your phone provides the screen, microphone, and controls.
 
-## Parts
+Before you print, buy or provide every item in the [Hardware Shopping List](hardware-parts.md). The printable files contain the enclosure only, not the electronics.
 
-| Part | Requirement |
-|---|---|
-| Computer | Jetson Orin Nano Super 8 GB developer kit with its power supply |
-| Storage | 256 GB or larger M.2 2280 NVMe SSD |
-| Camera | 37 × 37 mm USB UVC camera board with a lens near 100° |
-| Filament | About 300 g of PLA in three colors |
-| Small items | One zip tie and a drop of glue |
+## Check the Camera Fit
 
-The enclosure was designed around the Arducam IMX291 (B0200). A different camera must meet all three measurements:
+The enclosure was designed around the Arducam IMX291 (B0200). Before printing for a different camera, confirm that it meets the dimensions in the [Hardware Shopping List](hardware-parts.md).
 
-- Board: 37 × 37 mm and 1.4 to 1.8 mm thick, with connectors on the back.
-- Lens length: no more than 27 mm from the front of the board when focused fully inward.
-- Lens width: no part around the barrel wider than 26.5 mm.
-
-Measure the camera before printing. The glued visor makes a later camera change difficult.
+Measure the physical camera when possible. The glued visor makes a later camera change difficult.
 
 ## Print the Parts
 
